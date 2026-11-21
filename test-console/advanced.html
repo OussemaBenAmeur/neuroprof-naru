@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NARU Test Console</title>
+<style>
+:root{
+  --bg:#f6f7f9;--panel:#ffffff;--ink:#16181d;--muted:#626a78;--line:#e1e4ea;--soft:#eef0f4;
+  --accent:#2f5bd3;--accent-ink:#fff;--ok:#1f8a4c;--warn:#b26a00;--err:#c4322b;--code:#f3f4f7;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1115;--panel:#171a20;--ink:#e6e8ee;--muted:#9099a8;--line:#2a2f39;--soft:#1f232b;
+  --accent:#6d8ff0;--accent-ink:#0b0d12;--ok:#4cc38a;--warn:#e0a44a;--err:#f07067;--code:#12151a;}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans)}
+header{display:flex;gap:16px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);padding:3px 8px;border:1px solid var(--line);border-radius:99px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.dot.on{background:var(--ok)}.dot.bad{background:var(--err)}
+.grow{flex:1}
+.layout{display:grid;grid-template-columns:200px minmax(0,1fr) minmax(0,44%);height:calc(100vh - 53px)}
+nav{border-right:1px solid var(--line);overflow:auto;padding:8px 0;background:var(--panel)}
+nav a{display:flex;justify-content:space-between;padding:7px 16px;color:var(--ink);text-decoration:none;font-size:13.5px;cursor:pointer}
+nav a:hover{background:var(--soft)}
+nav a.active{background:var(--soft);font-weight:600;box-shadow:inset 3px 0 var(--accent)}
+nav small{color:var(--muted)}
+main{overflow:auto;padding:16px 20px 60px}
+aside{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+section.page{display:none}section.page.active{display:block}
+h2{font-size:17px;margin:2px 0 4px}
+p.lead{color:var(--muted);margin:0 0 14px;max-width:70ch}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.card h3{font-size:13.5px;margin:0 0 10px;display:flex;gap:8px;align-items:center}
+.route{font:12px var(--mono);color:var(--muted);font-weight:400}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:8px}
+.row>label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);flex:1;min-width:140px}
+.row>label.narrow{flex:0 0 auto;min-width:110px}
+input,select,textarea{font:13px var(--sans);color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px 8px;width:100%}
+textarea{font-family:var(--mono);font-size:12px;min-height:70px;resize:vertical}
+input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--accent) 40%,transparent);border-color:var(--accent)}
+button{font:13px var(--sans);border:1px solid var(--line);background:var(--soft);color:var(--ink);padding:6px 11px;border-radius:7px;cursor:pointer;white-space:nowrap}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+button.danger{color:var(--err)}
+button.small{padding:3px 8px;font-size:12px}
+.check{display:flex;gap:6px;align-items:center;font-size:12.5px;color:var(--muted)}
+.check input{width:auto}
+.hint{font-size:12px;color:var(--muted);margin:4px 0 0}
+.badge{font:11px var(--mono);padding:1px 6px;border-radius:5px;background:var(--soft);border:1px solid var(--line)}
+.s2{color:var(--ok)}.s3{color:var(--warn)}.s4,.s5{color:var(--err)}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500}
+tr.pick{cursor:pointer}tr.pick:hover td{background:var(--soft)}
+tr.sel td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+code,.mono{font-family:var(--mono);font-size:12px}
+pre{margin:0;font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word}
+/* inspector */
+.insp-head{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.insp-body{flex:1;overflow:auto;padding:12px 14px;background:var(--code)}
+.insp-meta{font:12px var(--mono);color:var(--muted);margin-bottom:8px;word-break:break-all}
+.history{max-height:30%;overflow:auto;border-top:1px solid var(--line)}
+.history div{display:flex;gap:8px;padding:4px 14px;font:12px var(--mono);cursor:pointer;border-bottom:1px solid var(--soft)}
+.history div:hover,.history div.cur{background:var(--soft)}
+.history .p{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tabs{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
+.tabs button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.log{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:8px 10px;height:300px;overflow:auto}
+/* transcript */
+.msg{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--bg)}
+.msg .who{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;gap:8px;align-items:center;margin-bottom:3px}
+.tc{border-left:3px solid var(--accent);padding:4px 8px;margin:4px 0;background:var(--soft);border-radius:4px}
+.thinking{color:var(--muted);font-style:italic}
+.cov td:first-child{width:22px}
+.okmark{color:var(--ok)}.nomark{color:var(--line)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:1100px){.layout{grid-template-columns:170px 1fr}aside{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);height:60vh}.layout{height:auto}main{overflow:visible}}
+@media (max-width:700px){.layout{grid-template-columns:1fr}nav{display:flex;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:0}nav a{white-space:nowrap}nav small{display:none}.grid2{grid-template-columns:1fr}main{padding:12px 16px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>NaruProf NARU · Test Console</h1>
+  <span class="pill" title="Scripted model fixture"><span class="dot" id="d-model"></span>model</span>
+  <span class="pill" title="Engine JAR process"><span class="dot" id="d-engine"></span>engine</span>
+  <span class="pill" title="HTTP readiness"><span class="dot" id="d-ready"></span>ready</span>
+  <span class="pill" title="Projection replay"><span class="dot" id="d-replay"></span>replay</span>
+  <span class="grow"></span>
+  <label class="check" style="gap:8px">Chat
+    <select id="chatSel" style="min-width:220px"><option value="">— none —</option></select>
+  </label>
+  <button class="small" onclick="refreshChats()">↻</button>
+  <span class="pill" id="covPill">0 / 0 routes</span>
+</header>
+
+<div class="layout">
+<nav id="nav"></nav>
+
+<main>
+
+<!-- ===================== RUNTIME ===================== -->
+<section class="page" data-page="runtime" data-title="Runtime">
+  <h2>Runtime</h2>
+  <p class="lead">Build the JAR, start the scripted model and the engine on a scratch profile, and watch their logs. Everything else in this console talks to the engine started here.</p>
+  <div class="card"><h3>Toolchain</h3><div id="tools"></div></div>
+  <div class="card">
+    <h3>Configuration <span class="route">applied to processes started after saving</span></h3>
+    <div class="row">
+      <label>Profile data dir (NARUPROF_DATA_DIR)<input id="c-dataDir" placeholder="empty → fresh temp dir on engine start"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="newProfile()">New empty profile</button></label>
+    </div>
+    <div class="row">
+      <label>Profile ID<input id="c-profileId"></label>
+      <label>JAVA_HOME (needs JDK 25)<input id="c-javaHome"></label>
+    </div>
+    <div class="row">
+      <label>Engine HTTP URL<input id="c-httpUrl"></label>
+      <label>Engine gRPC target<input id="c-grpcTarget"></label>
+      <label>Replay gRPC target<input id="c-replayTarget"></label>
+    </div>
+    <div class="row">
+      <label>VERTX_TO_NARU_TOKEN<input id="c-vertxToken"></label>
+      <label>TWIN_TO_NARU_TOKEN<input id="c-twinToken"></label>
+    </div>
+    <div class="row">
+      <label class="narrow">Model<select id="c-modelMode"><option value="ollama">Ollama (real Qwen)</option><option value="fixture">Scripted fixture</option></select></label>
+      <label>Ollama base URL<input id="c-ollamaBase"></label>
+      <label class="narrow">Ollama model<input id="c-ollamaModel"></label>
+      <label class="narrow">Context<input id="c-ollamaContext"></label>
+    </div>
+    <div class="row">
+      <label>Model URL<input id="c-modelUrl"></label>
+      <label class="narrow">Model ID<input id="c-modelId"></label>
+      <label class="narrow">Model port<input id="c-modelPort"></label>
+      <label class="narrow">Slow seconds<input id="c-slowSeconds"></label>
+    </div>
+    <div class="row"><label class="check"><input type="checkbox" id="c-ignoreEnvKeys"> LH_IGNORE_ENV_KEYS=1 (isolate from real API keys)</label></div>
+    <button class="primary" onclick="saveConfig()">Save configuration</button>
+  </div>
+  <div class="card">
+    <h3>Processes</h3>
+    <div class="row">
+      <button class="primary" onclick="quickStart()">▶ Start model + engine</button>
+      <button onclick="ctl('start/model')">Start model</button><button onclick="ctl('stop/model')">Stop model</button>
+      <button onclick="ctl('start/engine')">Start engine</button><button onclick="ctl('stop/engine')">Stop engine</button>
+      <button onclick="restartEngine()" title="Persistence check: same profile dir">Restart engine (same profile)</button>
+      <button onclick="ctl('start/replay')">Start replay</button><button onclick="ctl('stop/replay')">Stop replay</button>
+      <button class="danger" onclick="ctl('stop-all')">Stop all</button>
+    </div>
+    <div class="row">
+      <button onclick="build({})">mvn -DskipTests package</button>
+      <button onclick="build({skipTests:false,goal:'verify'})">mvn verify</button>
+      <button onclick="build({skipTests:false,goal:'verify',realDeps:true})">mvn -Preal-deps verify</button>
+      <button onclick="ctl('stop/build')">Cancel build</button>
+    </div>
+    <div class="row">
+      <label class="narrow">Test module<input id="t-module" value="contract-tests"></label>
+      <label>Test classes<input id="t-tests" value="ServletProbeTest,GraphAndSideTest,GoldenMigrationTest"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="build({tests:val('t-tests'),module:val('t-module')})">Run tests</button></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="build({tests:'ProjectionRpcTest',module:'ws-grpc'})">ProjectionRpcTest</button></label>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Logs</h3>
+    <div class="tabs" id="logTabs"></div>
+    <div class="log"><pre id="logView"></pre></div>
+  </div>
+</section>
+
+<!-- ===================== HEALTH ===================== -->
+<section class="page" data-page="health" data-title="Health & auth">
+  <h2>Health & auth</h2>
+  <p class="lead">The HTTP listener is a private boundary: every route, including liveness, demands the Vert.x bearer.</p>
+  <div class="card"><h3>Liveness <span class="route">GET /internal/health/live</span></h3>
+    <div class="row">
+      <button class="primary" onclick="api('GET','/internal/health/live')">With bearer → 200</button>
+      <button onclick="api('GET','/internal/health/live',{auth:'none'})">Without bearer → 401</button>
+      <button onclick="api('GET','/internal/health/live',{auth:'custom',customAuth:'Bearer wrong-token'})">Wrong token → 401</button>
+    </div></div>
+  <div class="card"><h3>Readiness <span class="route">GET /internal/health/ready</span></h3>
+    <button class="primary" onclick="api('GET','/internal/health/ready')">Check readiness</button></div>
+</section>
+
+<!-- ===================== CHATS ===================== -->
+<section class="page" data-page="chats" data-title="Chats">
+  <h2>Chats</h2>
+  <p class="lead">Teaching and practice sessions. Click a row to select it; the selection drives the Turn, Side chat and Graph pages.</p>
+  <div class="card"><h3>Create <span class="route">POST /api/chats</span></h3>
+    <div class="row">
+      <label>Title<input id="cc-title" value="Fractions demo"></label>
+      <label class="narrow">Kind<select id="cc-kind"><option value="">teaching (default)</option><option value="practice">practice</option></select></label>
+      <label class="narrow"><span>&nbsp;</span><button class="primary" onclick="createChat()">Create</button></label>
+    </div></div>
+  <div class="card"><h3>List <span class="route">GET /api/chats</span> <button class="small" onclick="refreshChats(true)">Refresh</button></h3>
+    <div id="chatTable" class="hint">No data yet.</div></div>
+  <div class="card"><h3>Selected chat <span class="mono" id="selChatLbl"></span></h3>
+    <div class="row">
+      <button class="primary" onclick="loadChat()">GET /api/chats/{id}</button>
+      <button onclick="needChat()&&api('GET',`/api/chats/${S.chat}/markdown`)">Markdown</button>
+      <button onclick="downloadMarkdown()">Download .md</button>
+      <button onclick="needChat()&&api('GET',`/api/jobs?chatId=${S.chat}`)">Jobs for chat</button>
+    </div>
+    <div class="row">
+      <label>New title<input id="ch-title" value="Renamed chat"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="needChat()&&api('PUT',`/api/chats/${S.chat}`,{json:{title:val('ch-title')}}).then(()=>refreshChats())">Rename (PUT)</button></label>
+    </div>
+    <div class="row">
+      <label class="narrow">Delete mode<select id="ch-delmode"><option value="preserve-graph">preserve-graph</option><option value="delete-nodes">delete-nodes</option><option value="">(omitted → 400)</option></select></label>
+      <label class="narrow"><span>&nbsp;</span><button class="danger" onclick="deleteChat()">DELETE chat</button></label>
+    </div>
+    <div class="row">
+      <label>Per-chat settings JSON <span class="route">PUT /api/chats/{id}/settings</span><textarea id="ch-settings">{"model":{"provider":"learning","id":"fixture"},"thinkingLevel":"off"}</textarea></label>
+    </div>
+    <button onclick="needChat()&&api('PUT',`/api/chats/${S.chat}/settings`,{json:J('ch-settings')})">Save chat settings</button>
+    <div class="row" style="margin-top:10px">
+      <label>Image snapshot ID <span class="route">GET /api/chats/{id}/images/{snapshotId}</span><input id="ch-img" value="0000000000000000000000000000000000000000000000000000000000000000"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="needChat()&&api('GET',`/api/chats/${S.chat}/images/${val('ch-img')}`)">Lookup (64 zeros → 404)</button></label>
+    </div>
+  </div>
+  <div class="card"><h3>Transcript</h3><div id="transcript" class="hint">Select a chat and load it.</div></div>
+</section>
+
+<!-- ===================== TURN ===================== -->
+<section class="page" data-page="turn" data-title="Turns">
+  <h2>Turns</h2>
+  <p class="lead">Submit learner input to the selected chat, follow the SSE turn stream, answer saved tool calls (probe, quiz, problem), steer, dismiss or abort.</p>
+  <div class="card"><h3>Saved tool calls in selected chat <button class="small" onclick="loadChat()">Reload chat</button></h3>
+    <div id="toolCalls" class="hint">Load a chat to list its tool calls.</div></div>
+  <div class="card"><h3>Compose input <span class="route">POST /api/chat</span></h3>
+    <div class="row">
+      <label class="narrow">Input type<select id="in-type" onchange="composeInput()">
+        <option value="text">text</option><option value="answer">answer (probe/quiz)</option>
+        <option value="thinking">thinking (practice)</option><option value="next">next (practice)</option></select></label>
+      <label>Text<input id="in-text" value="Why is one half equal to two quarters?" oninput="composeInput()"></label>
+    </div>
+    <div class="row">
+      <label>Answer JSON (for answer)<input id="in-answer" value='{"kind":"quiz","correct":true}' oninput="composeInput()"></label>
+      <label class="check narrow"><input type="checkbox" id="in-stale" onchange="composeInput()"> stale occurrence (→ 400)</label>
+    </div>
+    <div class="row">
+      <button class="small" onclick="setText('Why is one half equal to two quarters?')">Teaching question</button>
+      <button class="small" onclick="setText('Give me a fraction exercise.')">Practice request</button>
+      <button class="small" onclick="setText('[demo:slow] Please explain.')">[demo:slow] turn</button>
+      <button class="small" onclick="setThinking()">Practice reasoning</button>
+    </div>
+    <label class="hint">Request body (editable; regenerated when fields change)</label>
+    <textarea id="in-body" style="min-height:120px"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" onclick="submitTurn()">Submit</button>
+      <label class="check"><input type="checkbox" id="in-follow" checked> follow stream, then reload chat</label>
+    </div>
+  </div>
+  <div class="card"><h3>Turn stream <span class="route">GET /api/chats/{id}/stream</span></h3>
+    <button onclick="followStream()">Open stream</button>
+    <p class="hint">Use the Stop button in the response pane to disconnect a live stream.</p></div>
+  <div class="grid2">
+  <div class="card"><h3>Steer <span class="route">POST /api/chats/{id}/steer</span></h3>
+    <div class="row"><label>Text<input id="st-text" value="Focus on scaling"></label></div>
+    <button onclick="needChat()&&api('POST',`/api/chats/${S.chat}/steer`,{json:{input:{type:'steer',id:'steer_'+rid(),text:val('st-text')}}})">Steer (active turn → 200, idle → 409)</button></div>
+  <div class="card"><h3>Dismiss <span class="route">POST /api/chats/{id}/dismiss</span></h3>
+    <div class="row"><label>toolCallId<input id="dm-id" placeholder="pick a tool call above"></label></div>
+    <button onclick="needChat()&&api('POST',`/api/chats/${S.chat}/dismiss`,{json:{input:{type:'dismiss',toolCallId:val('dm-id'),answer:{kind:'quiz',dismissed:true}}}})">Dismiss</button></div>
+  </div>
+  <div class="card"><h3>Abort turn <span class="route">POST /api/activity/abort</span></h3>
+    <button class="danger" onclick="needChat()&&api('POST','/api/activity/abort',{json:{kind:'turn',id:S.chat}})">Abort current turn</button>
+    <button onclick="overlapDemo()">Overlap test: [demo:slow] turn → second submit (409) → steer → abort</button>
+    <p class="hint">The overlap test needs the model started with a slow delay (Runtime → Slow seconds).</p></div>
+</section>
+
+<!-- ===================== SIDE ===================== -->
+<section class="page" data-page="side" data-title="Side chats">
+  <h2>Side chats</h2>
+  <p class="lead">Hint threads anchored to an assistant message. Replies stream as NDJSON (<code>thread</code>, <code>text</code>, <code>done</code>).</p>
+  <div class="card"><h3>Threads <span class="route">GET /api/chats/{id}/side-chats</span> <button class="small" onclick="listSide()">Refresh</button></h3>
+    <div id="sideTable" class="hint">No data yet.</div></div>
+  <div class="card"><h3>Ask <span class="route">POST /api/chats/{id}/side-chats</span></h3>
+    <div class="row"><label>Text<input id="sd-text" value="Can you explain the idea without giving away the answer?"></label></div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="sd-follow"> follow-up in selected thread (<span class="mono" id="sd-thr">none</span>)</label>
+      <button class="small" onclick="fillAnchor()">Anchor from last assistant message</button>
+    </div>
+    <label class="hint">Anchor JSON (new threads only)</label>
+    <textarea id="sd-anchor"></textarea>
+    <div class="row" style="margin-top:8px"><button class="primary" onclick="askSide()">Ask</button>
+      <button onclick="val('sd-text','[demo:slow] A longer explanation, please.');askSide()">Ask slow (then Stop thread)</button></div>
+  </div>
+  <div class="card"><h3>Selected thread</h3>
+    <div class="row">
+      <button onclick="needThread()&&api('GET',`/api/chats/${S.chat}/side-chats/${S.thread}`)">Replay (GET NDJSON)</button>
+      <button onclick="needThread()&&api('PATCH',`/api/chats/${S.chat}/side-chats/${S.thread}`,{json:{open:false}})">PATCH open:false</button>
+      <button onclick="needThread()&&api('PATCH',`/api/chats/${S.chat}/side-chats/${S.thread}`,{json:{open:true}})">PATCH open:true</button>
+      <button class="danger" onclick="needThread()&&api('POST',`/api/chats/${S.chat}/side-chats/${S.thread}/stop`)">Stop (idle → 409)</button>
+    </div></div>
+</section>
+
+<!-- ===================== ACTIVITY ===================== -->
+<section class="page" data-page="activity" data-title="Activity & events">
+  <h2>Activity & events</h2>
+  <p class="lead">Running jobs, extractions and the named-event SSE feed.</p>
+  <div class="card"><h3>Snapshots</h3>
+    <div class="row">
+      <button onclick="api('GET','/api/activity')">GET /api/activity</button>
+      <button onclick="api('GET','/api/jobs')">GET /api/jobs</button>
+      <button onclick="needChat()&&api('GET','/api/jobs?chatId='+S.chat)">GET /api/jobs?chatId=selected</button>
+    </div></div>
+  <div class="card"><h3>Abort <span class="route">POST /api/activity/abort</span></h3>
+    <div class="row">
+      <label class="narrow">Kind<select id="ab-kind"><option>turn</option><option>extraction</option><option value="bogus">bogus (→ 400)</option></select></label>
+      <label>ID<input id="ab-id" placeholder="chat ID or source ID"></label>
+      <label class="narrow"><span>&nbsp;</span><button class="danger" onclick="api('POST','/api/activity/abort',{json:{kind:val('ab-kind'),id:val('ab-id')||S.chat}})">Abort</button></label>
+    </div></div>
+  <div class="card"><h3>Event feed <span class="route">GET /api/events</span></h3>
+    <div class="row"><button class="primary" id="evBtn" onclick="toggleEvents()">Connect</button><button onclick="$('evLog').textContent=''">Clear</button></div>
+    <div class="log" style="height:260px"><pre id="evLog"></pre></div>
+    <p class="hint">Connect before creating chats or importing notes to see <code>chats-changed</code>, <code>turn-started</code>, <code>turn-settled</code> and <code>: ping</code>.</p></div>
+</section>
+
+<!-- ===================== GRAPH ===================== -->
+<section class="page" data-page="graph" data-title="Knowledge graph">
+  <h2>Knowledge graph</h2>
+  <p class="lead">Import notes, inspect propositions and chains, organize sources, extract coverage from a chat.</p>
+  <div class="card"><h3>Import <span class="route">POST /api/graph/import</span></h3>
+    <div class="row">
+      <label>Files<input type="file" id="gi-files" multiple></label>
+      <label>Paths (comma-separated, optional, one per file)<input id="gi-paths" placeholder="course/fractions.md"></label>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="importFiles()">Import selected files</button>
+      <button onclick="importSample()">Import sample fractions.md (scripted: 2 propositions + 1 chain)</button>
+    </div></div>
+  <div class="card"><h3>Graph <span class="route">GET /api/graph</span> <button class="small" onclick="loadGraph()">Load</button></h3>
+    <div id="graphView" class="hint">Not loaded.</div></div>
+  <div class="card"><h3>Edit</h3>
+    <div class="row">
+      <label>Node ID (proposition or chain)<select id="g-node"></select></label>
+      <label class="narrow"><span>&nbsp;</span><button class="danger" onclick="api('DELETE','/api/graph/nodes/'+encodeURIComponent(val('g-node'))).then(loadGraphQuiet)">DELETE node</button></label>
+    </div>
+    <div class="row">
+      <label class="narrow">x<input id="g-x" value="120"></label><label class="narrow">y<input id="g-y" value="80"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="api('PUT','/api/graph/positions',{json:{[val('g-node')]:{x:+val('g-x'),y:+val('g-y')}}})">PUT position</button></label>
+    </div></div>
+  <div class="card"><h3>Coverage extraction</h3>
+    <div class="row">
+      <button onclick="needChat()&&api('POST','/api/graph/coverage/extract',{json:{chatId:S.chat}})">Extract from selected chat (202)</button>
+      <button onclick="api('GET','/api/graph/status')">GET /api/graph/status</button>
+      <button onclick="pollStatus()">Poll status until idle</button>
+    </div></div>
+  <div class="card"><h3>Sources <span class="route">/api/graph/sources</span> <button class="small" onclick="loadSources()">Load</button></h3>
+    <div id="srcView" class="hint">Not loaded.</div>
+    <div class="row" style="margin-top:8px">
+      <label>Source<select id="s-id"></select></label>
+      <label>New name<input id="s-name" value="Fractions lecture notes"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="api('POST','/api/graph/sources',{json:{action:'rename-source',id:val('s-id'),name:val('s-name')}}).then(loadSourcesQuiet)">Rename</button></label>
+    </div>
+    <label class="hint">Organize (raw POST body)</label>
+    <textarea id="s-org">{"action":"rename-source","id":"","name":"Fractions lecture notes"}</textarea>
+    <div class="row" style="margin-top:6px"><button onclick="api('POST','/api/graph/sources',{json:J('s-org')})">POST raw</button>
+      <label class="check"><input type="checkbox" id="s-delsess"> deleteSessions</label>
+      <button class="danger" onclick="api('DELETE','/api/graph/sources',{json:{sourceIds:[val('s-id')],folderIds:[],deleteSessions:$('s-delsess').checked}}).then(loadSourcesQuiet)">DELETE selected source</button></div>
+  </div>
+  <div class="card"><h3>Render settings <span class="route">/api/graph/render-settings</span></h3>
+    <textarea id="rs-body">{"sizeUnits":"world","nodeSize":3}</textarea>
+    <div class="row" style="margin-top:6px"><button onclick="api('GET','/api/graph/render-settings')">GET</button><button onclick="api('PUT','/api/graph/render-settings',{json:J('rs-body')})">PUT</button></div></div>
+</section>
+
+<!-- ===================== SETTINGS ===================== -->
+<section class="page" data-page="settings" data-title="Settings & models">
+  <h2>Settings & models</h2>
+  <p class="lead">Profile settings, model slots, prompt overrides, API keys (masked), themes and the dictation token.</p>
+  <div class="card"><h3>Models & settings</h3>
+    <div class="row"><button onclick="api('GET','/api/models')">GET /api/models</button><button onclick="api('GET','/api/settings')">GET /api/settings</button></div>
+    <div class="row"><label class="narrow">Section<input id="se-sec" value="models"></label></div>
+    <textarea id="se-body">{"strong":{"model":{"provider":"learning","id":"fixture"}},"cheap":{"model":{"provider":"learning","id":"fixture"}},"vision":{"model":{"provider":"learning","id":"fixture"}}}</textarea>
+    <div class="row" style="margin-top:6px"><button onclick="api('PUT','/api/settings/'+val('se-sec'),{json:J('se-body')})">PUT /api/settings/{section}</button></div></div>
+  <div class="card"><h3>Prompts <span class="route">/api/settings/prompts</span></h3>
+    <div class="row"><button onclick="loadPrompts()">GET prompts</button></div>
+    <div class="row"><label>Path<select id="pr-path"></select></label></div>
+    <div class="row"><label>Override text<textarea id="pr-text">Demo override</textarea></label></div>
+    <div class="row"><button onclick="api('PUT','/api/settings/prompts/'+val('pr-path'),{json:{text:val('pr-text')}})">PUT override</button>
+      <button class="danger" onclick="api('DELETE','/api/settings/prompts/'+val('pr-path'))">DELETE override</button></div></div>
+  <div class="card"><h3>API keys <span class="route">/api/keys</span></h3>
+    <div class="row"><button onclick="api('GET','/api/keys')">GET keys</button></div>
+    <div class="row"><label class="narrow">Key ID<input id="k-id" value="OPENAI_API_KEY"></label><label>Value<input id="k-val" value="fixture-only-not-a-real-key"></label></div>
+    <div class="row"><button onclick="api('PUT','/api/keys/'+val('k-id'),{json:{value:val('k-val')}})">PUT key</button>
+      <button class="danger" onclick="api('DELETE','/api/keys/'+val('k-id'))">DELETE key</button>
+      <button onclick="api('GET','/api/stt/token')">GET /api/stt/token (no Deepgram key → 503)</button></div></div>
+  <div class="card"><h3>Themes <span class="route">/api/themes</span></h3>
+    <div class="row"><button onclick="api('GET','/api/themes')">GET themes</button></div>
+    <div class="row"><label>Name<input id="th-name" value="Demo theme"></label><label class="narrow">Mode<select id="th-mode"><option>dark</option><option>light</option></select></label><label class="narrow">Color<input type="color" id="th-col" value="#234567"></label></div>
+    <div class="row"><button onclick="createTheme()">POST theme (201)</button></div>
+    <div class="row"><label>Theme ID<input id="th-id"></label><label class="narrow"><span>&nbsp;</span><button class="danger" onclick="api('DELETE','/api/themes/'+val('th-id'))">DELETE theme</button></label></div></div>
+</section>
+
+<!-- ===================== EXPORT ===================== -->
+<section class="page" data-page="export" data-title="Profile export">
+  <h2>Profile export</h2>
+  <p class="lead">The private ZIP containing <code>chats/&lt;id&gt;.json</code> and the graph ledgers.</p>
+  <div class="card"><h3>Export <span class="route">GET /internal/v1/profile/export</span></h3>
+    <button class="primary" onclick="api('GET','/internal/v1/profile/export')">Fetch ZIP and list members</button>
+    <p class="hint">The response pane lists the archive members and offers a download.</p></div>
+</section>
+
+<!-- ===================== GRPC ===================== -->
+<section class="page" data-page="grpc" data-title="gRPC projection">
+  <h2>gRPC projection</h2>
+  <p class="lead">Ditto's view: <code>LearningProjection/GetSnapshot</code> and <code>Watch</code>. Runs through <code>grpcurl</code>; output appears in the <em>task</em> log below.</p>
+  <div class="card">
+    <div class="row">
+      <label>Profile ID (blank = configured)<input id="gr-pid"></label>
+      <label class="narrow">after_sequence<input id="gr-after" value="1"></label>
+      <label class="narrow">Max seconds<input id="gr-max" value="8"></label>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="gr-replay"> target the replay process</label>
+      <label class="check"><input type="checkbox" id="gr-noauth"> omit bearer (→ UNAUTHENTICATED)</label>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="grpc('GetSnapshot')">GetSnapshot</button>
+      <button class="primary" onclick="grpc('Watch')">Watch</button>
+      <button onclick="val('gr-pid','00000000-0000-0000-0000-000000000000');grpc('GetSnapshot')">Unknown profile (→ NOT_FOUND)</button>
+      <button onclick="val('gr-after','999999');grpc('Watch')">Cursor ahead (→ OUT_OF_RANGE)</button>
+      <button onclick="ctl('stop/task')">Stop</button>
+    </div>
+  </div>
+  <div class="card"><h3>Task output</h3><div class="log"><pre class="taskLog"></pre></div></div>
+</section>
+
+<!-- ===================== CLI ===================== -->
+<section class="page" data-page="cli" data-title="Profile CLI">
+  <h2>Profile CLI</h2>
+  <p class="lead">Maintenance commands of the JAR (<code>java -jar app.jar profile …</code>). They use the configured data dir and profile ID. Stop the engine first, except for preview.</p>
+  <div class="card">
+    <div class="row"><label>Legacy directory<input id="pc-src" value="fixtures/golden-data"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="cli(['profile','preview',val('pc-src')])">preview</button></label></div>
+    <div class="row"><label>Preview SHA-256 (auto-filled after preview)<input id="pc-sha"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="cli(['profile','import',val('pc-src'),val('pc-sha')])">import</button></label></div>
+    <div class="row"><label>Export directory (must not exist)<input id="pc-out"></label>
+      <label class="narrow"><span>&nbsp;</span><button onclick="cli(['profile','export',val('pc-out')])">export</button></label></div>
+    <div class="row"><button onclick="cli(['profile','status'])">status</button>
+      <button class="danger" onclick="confirm('Retire tombstones this profile permanently. Continue?')&&cli(['profile','retire',cfg.profileId])">retire configured profile</button>
+      <button onclick="ctl('stop/engine')">Stop engine</button><button onclick="ctl('start/engine')">Start engine</button></div>
+  </div>
+  <div class="card"><h3>Read an exported directory with the original LearnHarness scripts</h3>
+    <div class="row"><label class="narrow">Script<select id="ls-script"><option>sessions</option><option>graph</option></select></label>
+      <label>Args<input id="ls-args" value="--format json list"></label></div>
+    <div class="row"><button onclick="runScript({name:'learning-script',script:val('ls-script'),dataDir:val('pc-out'),args:val('ls-args').split(/\s+/).filter(Boolean)})">Run on export dir</button></div></div>
+  <div class="card"><h3>Task output</h3><div class="log"><pre class="taskLog"></pre></div></div>
+</section>
+
+<!-- ===================== FIXTURES ===================== -->
+<section class="page" data-page="fixtures" data-title="Fixtures & scripts">
+  <h2>Fixtures & scripts</h2>
+  <p class="lead">The module's own end-to-end clients. They run against the engine started on the Runtime page.</p>
+  <div class="card">
+    <div class="row">
+      <button class="primary" onclick="runScript({name:'demo'})">demo.py</button>
+      <button onclick="runScript({name:'demo-grpc'})">demo.py --grpc</button>
+      <button onclick="runScript({name:'demo-extras-nogrpc'})">demo.py --extras (fresh profile)</button>
+      <button onclick="runScript({name:'demo-extras'})">demo.py --grpc --extras</button>
+    </div>
+    <div class="row">
+      <button onclick="runScript({name:'verify-http'})">verify_http.py</button>
+      <button onclick="runScript({name:'desktop-ipc'})">node --test desktop-test.cjs</button>
+      <button onclick="runScript({name:'read-sessions'})">read-profile.py sessions list</button>
+      <button onclick="runScript({name:'read-graph'})">read-profile.py graph propositions</button>
+      <button onclick="ctl('stop/task')">Stop task</button>
+    </div>
+  </div>
+  <div class="card"><h3>Task output</h3><div class="log" style="height:420px"><pre class="taskLog"></pre></div></div>
+</section>
+
+<!-- ===================== RAW ===================== -->
+<section class="page" data-page="raw" data-title="Raw request">
+  <h2>Raw request</h2>
+  <p class="lead">Send anything to the engine. Streaming responses render live.</p>
+  <div class="card">
+    <div class="row">
+      <label class="narrow">Method<select id="r-m"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></label>
+      <label>Path<input id="r-p" value="/api/chats"></label>
+      <label class="narrow">Auth<select id="r-a"><option value="vertx">Vert.x bearer</option><option value="none">none</option><option value="custom">custom</option></select></label>
+    </div>
+    <div class="row"><label>Custom Authorization header<input id="r-ah" value="Bearer wrong"></label></div>
+    <label class="hint">JSON body (blank = none)</label>
+    <textarea id="r-b"></textarea>
+    <div class="row" style="margin-top:6px"><button class="primary" onclick="rawSend()">Send</button></div>
+  </div>
+</section>
+
+<!-- ===================== COVERAGE ===================== -->
+<section class="page" data-page="coverage" data-title="Coverage">
+  <h2>Coverage</h2>
+  <p class="lead">Every controller mapping and RPC of the module, with the statuses observed from this console during this browser session.</p>
+  <div class="card"><table class="cov" id="covTable"></table></div>
+</section>
+
+</main>
+
+<aside>
+  <div class="insp-head">
+    <strong style="font-size:13px">Response</strong>
+    <span id="i-status" class="badge">—</span>
+    <span class="grow"></span>
+    <button class="small" id="i-stop" onclick="stopSel()" style="display:none">■ Stop stream</button>
+    <button class="small" onclick="copyResp()">Copy</button>
+  </div>
+  <div class="insp-body">
+    <div class="insp-meta" id="i-meta">No request yet. Start on the Runtime page.</div>
+    <div id="i-extra"></div>
+    <pre id="i-body"></pre>
+  </div>
+  <div class="history" id="hist"></div>
+</aside>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const val = (id, v) => { const e = $(id); if (v !== undefined) e.value = v; return e.value.trim(); };
+const J = id => { const t = val(id); try { return t ? JSON.parse(t) : undefined; } catch (e) { alert(`Invalid JSON in ${id}: ${e.message}`); throw e; } };
+const rid = () => Math.random().toString(36).slice(2, 10);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S = { chat: '', chatData: null, thread: '', graph: null, threads: [] };
+let cfg = {};
+
+/* ---------------- route inventory & coverage ---------------- */
+const ROUTES = [
+ ['GET','/internal/health/live'],['GET','/internal/health/ready'],['GET','/internal/v1/profile/export'],
+ ['POST','/api/chats'],['GET','/api/chats'],['GET','/api/chats/{id}'],['PUT','/api/chats/{id}'],['DELETE','/api/chats/{id}'],
+ ['POST','/api/chat'],['GET','/api/chats/{id}/stream'],['POST','/api/chats/{id}/steer'],['POST','/api/chats/{id}/dismiss'],
+ ['GET','/api/chats/{id}/markdown'],['GET','/api/chats/{id}/images/{snapshotId}'],['PUT','/api/chats/{id}/settings'],
+ ['GET','/api/chats/{id}/side-chats'],['POST','/api/chats/{id}/side-chats'],['GET','/api/chats/{id}/side-chats/{threadId}'],
+ ['PATCH','/api/chats/{id}/side-chats/{threadId}'],['POST','/api/chats/{id}/side-chats/{threadId}/stop'],
+ ['POST','/api/activity/abort'],['GET','/api/activity'],['GET','/api/events'],['GET','/api/jobs'],
+ ['POST','/api/graph/import'],['GET','/api/graph'],['POST','/api/graph/coverage/extract'],['GET','/api/graph/status'],
+ ['DELETE','/api/graph/nodes/{id}'],['GET','/api/graph/sources'],['POST','/api/graph/sources'],['DELETE','/api/graph/sources'],
+ ['PUT','/api/graph/positions'],['GET','/api/graph/render-settings'],['PUT','/api/graph/render-settings'],
+ ['GET','/api/models'],['GET','/api/settings'],['PUT','/api/settings/{section}'],['GET','/api/settings/prompts'],
+ ['PUT','/api/settings/prompts/{*path}'],['DELETE','/api/settings/prompts/{*path}'],
+ ['GET','/api/keys'],['PUT','/api/keys/{id}'],['DELETE','/api/keys/{id}'],
+ ['GET','/api/themes'],['POST','/api/themes'],['DELETE','/api/themes/{id}'],['GET','/api/stt/token'],
+ ['RPC','LearningProjection/GetSnapshot'],['RPC','LearningProjection/Watch'],
+].map(([m,p]) => ({ m, p, seen: new Set(), re: m === 'RPC' ? null :
+  new RegExp('^' + p.replace(/\{\*path\}/, '.+').replace(/\{[^}]+\}/g, '[^/]+') + '$') }));
+function cover(method, path, status) {
+  const clean = path.split('?')[0];
+  // prefer the most specific (longest literal) match
+  const hits = ROUTES.filter(r => r.m === method && r.re && r.re.test(clean));
+  hits.sort((a, b) => b.p.replace(/\{[^}]+\}/g,'').length - a.p.replace(/\{[^}]+\}/g,'').length);
+  if (hits[0]) { hits[0].seen.add(status); renderCoverage(); }
+}
+function renderCoverage() {
+  const done = ROUTES.filter(r => r.seen.size).length;
+  $('covPill').textContent = `${done} / ${ROUTES.length} routes`;
+  $('covTable').innerHTML = '<tr><th></th><th>Method</th><th>Route</th><th>Statuses seen</th></tr>' + ROUTES.map(r =>
+    `<tr><td class="${r.seen.size ? 'okmark' : 'nomark'}">${r.seen.size ? '✔' : '○'}</td><td class="mono">${r.m}</td><td class="mono">${esc(r.p)}</td><td>${[...r.seen].map(s => `<span class="badge s${String(s)[0]}">${s}</span>`).join(' ')}</td></tr>`).join('');
+}
+
+/* ---------------- navigation ---------------- */
+function buildNav() {
+  const nav = $('nav');
+  document.querySelectorAll('section.page').forEach(sec => {
+    const a = document.createElement('a');
+    a.textContent = sec.dataset.title; a.dataset.page = sec.dataset.page;
+    a.onclick = () => show(sec.dataset.page);
+    nav.appendChild(a);
+  });
+}
+function show(page) {
+  document.querySelectorAll('section.page').forEach(s => s.classList.toggle('active', s.dataset.page === page));
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+  try { localStorage.setItem('naru.page', page); } catch {}
+  if (page === 'turn' || page === 'side') composeInput();
+}
+
+/* ---------------- inspector / history ---------------- */
+const HIST = []; let selEntry = null;
+function newEntry(e) { e.id = HIST.length; e.body = ''; HIST.unshift(e); if (HIST.length > 80) HIST.pop(); selEntry = e; renderHist(); renderEntry(); return e; }
+function renderHist() {
+  $('hist').innerHTML = HIST.map(e => `<div class="${e === selEntry ? 'cur' : ''}" data-id="${e.id}"><span class="badge s${String(e.status)[0]}">${e.status ?? '…'}</span><span>${e.method}</span><span class="p">${esc(e.path)}</span><span>${e.ms != null ? e.ms + 'ms' : ''}</span></div>`).join('');
+  $('hist').querySelectorAll('div').forEach(d => d.onclick = () => { selEntry = HIST.find(e => e.id == d.dataset.id); renderHist(); renderEntry(); });
+}
+function renderEntry() {
+  const e = selEntry; if (!e) return;
+  $('i-status').textContent = e.status ?? 'pending'; $('i-status').className = 'badge s' + String(e.status)[0];
+  $('i-meta').innerHTML = `${esc(e.method)} ${esc(e.path)}${e.ct ? ' · ' + esc(e.ct) : ''}${e.ms != null ? ' · ' + e.ms + ' ms' : ''}${e.streaming ? ' · <b>streaming…</b>' : ''}` +
+    (e.req ? `<details style="margin-top:6px"><summary>request body</summary><pre>${esc(e.req)}</pre></details>` : '');
+  $('i-extra').innerHTML = e.extra || '';
+  $('i-body').textContent = e.pretty ?? e.body;
+  $('i-stop').style.display = e.streaming ? '' : 'none';
+}
+function stopSel() { if (selEntry?.ctrl) selEntry.ctrl.abort(); }
+function copyResp() { navigator.clipboard?.writeText($('i-body').textContent); }
+
+/* ---------------- core API call ---------------- */
+async function api(method, path, o = {}) {
+  const headers = { 'X-Naru-Auth': o.auth || 'vertx' };
+  if (o.auth === 'custom') headers['X-Naru-Authorization'] = o.customAuth || '';
+  let body;
+  if (o.json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(o.json); }
+  if (o.form) body = o.form;
+  const ctrl = new AbortController();
+  const e = newEntry({ method, path, ctrl, req: o.json !== undefined ? JSON.stringify(o.json, null, 2) : (o.form ? '[multipart form]' : '') });
+  const t0 = performance.now();
+  let res;
+  try { res = await fetch('/naru' + path, { method, headers, body, signal: ctrl.signal }); }
+  catch (err) { e.status = 'ERR'; e.body = String(err); e.ms = Math.round(performance.now() - t0); renderHist(); renderEntry(); return e; }
+  e.status = res.status; e.ct = res.headers.get('content-type') || ''; e.headers = res.headers;
+  cover(method, path, res.status);
+  const streaming = /event-stream|ndjson/.test(e.ct);
+  if (streaming) {
+    e.streaming = true; renderHist(); renderEntry();
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    e.events = [];
+    try {
+      for (;;) {
+        const { value, done } = await reader.read(); if (done) break;
+        const chunk = dec.decode(value, { stream: true }); e.body += chunk; buf += chunk;
+        const lines = buf.split('\n'); buf = lines.pop();
+        for (const line of lines) {
+          if (/ndjson/.test(e.ct) && line.trim()) { try { const ev = JSON.parse(line); e.events.push(ev); o.onEvent?.(ev, e); } catch {} }
+          if (/event-stream/.test(e.ct)) { o.onLine?.(line, e); if (line.startsWith('data: ')) { const d = line.slice(6); let ev = d; try { ev = JSON.parse(d); } catch {} e.events.push(ev); o.onEvent?.(ev, e); } }
+        }
+        if (e === selEntry) { $('i-body').textContent = e.body; const b = document.querySelector('.insp-body'); b.scrollTop = b.scrollHeight; }
+        if (o.stopWhen?.(e)) { ctrl.abort(); break; }
+      }
+    } catch (err) { if (err.name !== 'AbortError') e.body += `\n[stream error: ${err}]`; else e.body += '\n[disconnected by console]'; }
+    e.streaming = false;
+  } else if (/zip|octet-stream/.test(e.ct)) {
+    const buf = await res.arrayBuffer();
+    const names = zipNames(buf);
+    const url = URL.createObjectURL(new Blob([buf], { type: e.ct }));
+    e.extra = `<p><a href="${url}" download="naruprof-profile.zip">⬇ Download ZIP (${buf.byteLength.toLocaleString()} bytes)</a></p>`;
+    e.body = `${names.length} member(s):\n` + names.join('\n');
+  } else {
+    e.body = await res.text();
+    try { e.data = JSON.parse(e.body); e.pretty = JSON.stringify(e.data, null, 2); } catch {}
+    if (res.status === 401 && !e.body) e.body = '(401 Unauthorized · WWW-Authenticate: ' + (res.headers.get('www-authenticate') || '') + ')';
+  }
+  e.ms = Math.round(performance.now() - t0);
+  renderHist(); if (e === selEntry) renderEntry();
+  if (!o.quiet && e.data?.proxyError) toast(e.data.proxyError);
+  return e;
+}
+function zipNames(buf) {
+  const v = new DataView(buf); let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (v.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) return ['(not a readable zip)'];
+  const n = v.getUint16(eocd + 10, true); let p = v.getUint32(eocd + 16, true); const out = []; const dec = new TextDecoder();
+  for (let k = 0; k < n && v.getUint32(p, true) === 0x02014b50; k++) {
+    const nl = v.getUint16(p + 28, true), xl = v.getUint16(p + 30, true), cl = v.getUint16(p + 32, true);
+    out.push(dec.decode(new Uint8Array(buf, p + 46, nl))); p += 46 + nl + xl + cl;
+  }
+  return out;
+}
+function toast(msg) { const e = selEntry; if (e) { e.extra = `<p class="s4">${esc(msg)}</p>`; renderEntry(); } }
+
+/* ---------------- control plane ---------------- */
+async function ctl(op, body) {
+  const r = await fetch('/ctl/' + op, { method: body ? 'POST' : (op.startsWith('state') || op.startsWith('logs') ? 'GET' : 'POST'),
+    headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (j.error) alert(j.error);
+  const map = { 'start/model': 'model', 'start/engine': 'engine', 'start/replay': 'replay', 'build': 'build', 'cli': 'task', 'script': 'task', 'grpc': 'task' };
+  if (map[op]) setLogTab(map[op]);
+  pollState();
+  return j;
+}
+const CFG_KEYS = ['modelMode','ollamaBase','ollamaModel','ollamaContext','dataDir','profileId','javaHome','httpUrl','grpcTarget','replayTarget','vertxToken','twinToken','modelUrl','modelId','modelPort','slowSeconds'];
+async function pollState() {
+  try {
+    const s = await (await fetch('/ctl/state')).json();
+    const first = !cfg.profileId; cfg = s.config;
+    if (first) fillConfig();
+    else if (document.activeElement?.id !== 'c-dataDir') $('c-dataDir').value = cfg.dataDir;
+    for (const n of ['model', 'engine', 'replay']) $('d-' + n).className = 'dot' + (s.procs[n].running ? ' on' : (s.procs[n].exit ? ' bad' : ''));
+    const t = s.tools;
+    const item = (ok, label, fix) => `<span class="pill" style="margin:0 6px 6px 0"><span class="dot ${ok ? 'on' : 'bad'}"></span>${label}${!ok && fix ? ' — ' + fix : ''}</span>`;
+    $('tools').innerHTML =
+      item(t.jar, 'app/target/app-1.0.0.jar', 'build it below') +
+      item(t.javacInJavaHome, 'JDK 25 compiler (javac) in JAVA_HOME', 'install java-25-openjdk-devel') +
+      item(t.mvn, 'mvn') + item(t.python, 'python3') + item(t.node, 'node') +
+      item(t.grpcurl, 'grpcurl', 'needed for the gRPC page') + item(t.pdftotext, 'poppler pdftotext', 'PDF imports only');
+  } catch { for (const n of ['model', 'engine', 'replay']) $('d-' + n).className = 'dot bad'; }
+}
+async function pollReady() {
+  try { const r = await fetch('/naru/internal/health/ready', { headers: { 'X-Naru-Auth': 'vertx' } }); $('d-ready').className = 'dot' + (r.ok ? ' on' : ' bad'); }
+  catch { $('d-ready').className = 'dot bad'; }
+}
+function fillConfig() { for (const k of CFG_KEYS) $('c-' + k).value = cfg[k] ?? ''; $('c-ignoreEnvKeys').checked = !!cfg.ignoreEnvKeys; }
+async function saveConfig() {
+  const body = {}; for (const k of CFG_KEYS) body[k] = $('c-' + k).value.trim(); body.ignoreEnvKeys = $('c-ignoreEnvKeys').checked;
+  const r = await fetch('/ctl/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  cfg = (await r.json()).config; fillConfig();
+}
+async function newProfile() { const j = await ctl('new-profile'); $('c-dataDir').value = j.dataDir; cfg.dataDir = j.dataDir; }
+async function quickStart() {
+  await saveConfig();
+  await ctl('start/model'); await ctl('start/engine');
+  setLogTab('engine');
+  for (let i = 0; i < 90; i++) { await sleep(1000); const r = await fetch('/naru/internal/health/ready', { headers: { 'X-Naru-Auth': 'vertx' } }).catch(() => null); if (r?.ok) { pollReady(); refreshChats(); return; } }
+}
+async function restartEngine() { await ctl('stop/engine'); await sleep(800); await ctl('start/engine'); }
+function build(b) { ctl('build', b); }
+function cli(args) { ctl('cli', { args }); }
+function runScript(b) { ctl('script', b); }
+function grpc(method) {
+  ctl('grpc', { method, profileId: val('gr-pid'), afterSequence: val('gr-after'), maxTime: +val('gr-max') || 8, replay: $('gr-replay').checked, noAuth: $('gr-noauth').checked });
+  const r = ROUTES.find(x => x.p.endsWith(method)); r.seen.add('run'); renderCoverage();
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* logs */
+let logTab = 'engine'; const logSince = {}; const logText = {};
+function setLogTab(n) { logTab = n; renderLogTabs(); $('logView').textContent = logText[n] || ''; }
+function renderLogTabs() {
+  $('logTabs').innerHTML = ['model', 'engine', 'replay', 'build', 'task'].map(n => `<button class="small ${n === logTab ? 'on' : ''}" onclick="setLogTab('${n}')">${n}</button>`).join('');
+}
+async function pollLogs() {
+  for (const n of new Set([logTab, 'task'])) {
+    try {
+      const j = await (await fetch(`/ctl/logs/${n}?since=${logSince[n] || 0}`)).json();
+      if (j.lines.length) {
+        logText[n] = ((logText[n] || '') + j.lines.join('\n') + '\n').slice(-400000);
+        if (n === 'task') afterTaskOutput(j.lines);
+      }
+      logSince[n] = j.next;
+    } catch {}
+  }
+  const lv = $('logView'); const atBottom = lv.parentElement.scrollTop + lv.parentElement.clientHeight >= lv.parentElement.scrollHeight - 30;
+  lv.textContent = logText[logTab] || '';
+  if (atBottom) lv.parentElement.scrollTop = lv.parentElement.scrollHeight;
+  document.querySelectorAll('.taskLog').forEach(p => { if (p.textContent.length !== (logText.task || '').length) { p.textContent = logText.task || ''; p.parentElement.scrollTop = p.parentElement.scrollHeight; } });
+}
+function afterTaskOutput(lines) {
+  const m = lines.join('\n').match(/"sha256"\s*:\s*"([0-9a-f]{64})"/); if (m) val('pc-sha', m[1]);
+}
+
+/* ---------------- chats ---------------- */
+function needChat() { if (!S.chat) { alert('Select or create a chat first (top-right selector or Chats page).'); return false; } return true; }
+function needThread() { if (!needChat()) return false; if (!S.thread) { alert('Select a side thread first.'); return false; } return true; }
+async function createChat() {
+  const body = { title: val('cc-title') }; if (val('cc-kind')) body.kind = val('cc-kind');
+  const e = await api('POST', '/api/chats', { json: body });
+  if (e.data?.id) { await refreshChats(); selectChat(e.data.id); }
+}
+async function refreshChats(visible) {
+  const e = visible ? await api('GET', '/api/chats') : await quietGet('/api/chats');
+  const rows = e?.data?.chats || []; S.chats = rows;
+  $('chatSel').innerHTML = '<option value="">— none —</option>' + rows.map(r => `<option value="${esc(r.id)}">${esc(r.title || r.id)} · ${esc(r.kind || '')}</option>`).join('');
+  $('chatSel').value = S.chat;
+  $('chatTable').innerHTML = rows.length ? `<table><tr><th>Title</th><th>Kind</th><th>Phase</th><th>Pending</th><th>ID</th></tr>${rows.map(r =>
+    `<tr class="pick ${r.id === S.chat ? 'sel' : ''}" onclick="selectChat('${esc(r.id)}')"><td>${esc(r.title)}</td><td>${esc(r.kind)}</td><td>${esc(r.phase)}</td><td class="mono">${esc(JSON.stringify(r.pendingQuestion ?? r.pendingProblem ?? null)).slice(0, 60)}</td><td class="mono">${esc(r.id)}</td></tr>`).join('')}</table>` : '<p class="hint">No chats.</p>';
+}
+async function quietGet(path) {
+  try { const r = await fetch('/naru' + path, { headers: { 'X-Naru-Auth': 'vertx' } }); if (!r.ok) return null; return { data: await r.json() }; } catch { return null; }
+}
+function selectChat(id) {
+  S.chat = id; S.thread = ''; $('chatSel').value = id; $('selChatLbl').textContent = id; $('sd-thr').textContent = 'none';
+  refreshChats(); if (id) loadChat(true);
+}
+$('chatSel').onchange = e => selectChat(e.target.value);
+async function loadChat(quiet) {
+  if (!needChat()) return;
+  const e = quiet ? await quietGet(`/api/chats/${S.chat}`) : await api('GET', `/api/chats/${S.chat}`);
+  if (!e?.data) return; S.chatData = e.data;
+  renderTranscript(); renderToolCalls(); composeInput(); fillAnchor(true);
+}
+function textOf(c) {
+  if (typeof c === 'string') return c;
+  if (!Array.isArray(c)) return JSON.stringify(c);
+  return c.map(p => p.type === 'text' ? p.text : p.type === 'thinking' ? `(${p.thinking})` : p.type === 'toolCall' ? `→ ${p.name}(${JSON.stringify(p.arguments)})` : JSON.stringify(p)).join('\n');
+}
+function renderTranscript() {
+  const d = S.chatData; if (!d) return;
+  $('transcript').innerHTML = `<p class="hint">${d.messages.length} messages · tree: <code>${esc(JSON.stringify(d.tree ?? null)).slice(0, 300)}</code></p>` + d.messages.map(m => {
+    let inner = '';
+    if (m.role === 'assistant' && Array.isArray(m.content)) inner = m.content.map((p, i) =>
+      p.type === 'text' ? `<div>${esc(p.text)}</div>` : p.type === 'thinking' ? `<div class="thinking">${esc(p.thinking).slice(0, 400)}</div>` :
+      p.type === 'toolCall' ? `<div class="tc"><b>${esc(p.name)}</b> <span class="mono">${esc(p.id)} · index ${i}</span><pre>${esc(JSON.stringify(p.arguments, null, 1))}</pre></div>` : `<pre>${esc(JSON.stringify(p))}</pre>`).join('');
+    else inner = `<div>${esc(textOf(m.content)).slice(0, 1200)}</div>` + (m.details ? `<pre class="mono">details: ${esc(JSON.stringify(m.details))}</pre>` : '');
+    return `<div class="msg"><div class="who"><b>${esc(m.role)}</b>${m.toolName ? `<span>${esc(m.toolName)}</span>` : ''}${m.toolCallId ? `<span class="mono">${esc(m.toolCallId)}</span>` : ''}${m.stopReason ? `<span class="badge">${esc(m.stopReason)}</span>` : ''}<span class="mono">${esc(m.id || '')}</span></div>${inner}</div>`;
+  }).join('');
+}
+function toolCalls() {
+  const d = S.chatData; if (!d) return [];
+  const answered = new Set(d.messages.filter(m => m.role === 'toolResult').map(m => m.toolCallId));
+  const out = [];
+  d.messages.forEach(m => {
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) return;
+    m.content.forEach((p, i) => { if (p.type === 'toolCall') out.push({ part: p, answered: answered.has(p.id), aborted: ['aborted', 'error'].includes(m.stopReason), occurrence: { messageId: m.id, contentIndex: i, toolCallId: p.id, toolName: p.name } }); });
+  });
+  return out;
+}
+function renderToolCalls() {
+  const calls = toolCalls();
+  if (!S.pick || !calls.find(c => c.part.id === S.pick.part.id)) S.pick = [...calls].reverse().find(c => !c.answered && !c.aborted) || null;
+  if (S.pick) { val('dm-id', S.pick.part.id); }
+  $('toolCalls').innerHTML = calls.length ? `<table><tr><th>Tool</th><th>Call ID</th><th>Arguments</th><th>State</th></tr>${calls.map((c, k) =>
+    `<tr class="pick ${S.pick && S.pick.part.id === c.part.id ? 'sel' : ''}" onclick="pickCall(${k})"><td><b>${esc(c.part.name)}</b></td><td class="mono">${esc(c.part.id)}</td><td class="mono">${esc(JSON.stringify(c.part.arguments)).slice(0, 120)}</td><td>${c.answered ? 'answered' : c.aborted ? 'aborted' : '<b>open</b>'}</td></tr>`).join('')}</table><p class="hint">Click a row to target it with an answer / thinking / dismiss.</p>` : '<p class="hint">No tool calls yet.</p>';
+}
+function pickCall(k) {
+  S.pick = toolCalls()[k]; renderToolCalls();
+  const n = S.pick.part.name; val('in-type', n === 'problem' ? 'thinking' : 'answer'); composeInput();
+}
+function composeInput() {
+  if (!$('in-type')) return;
+  const t = val('in-type'); let input;
+  if (t === 'text') input = { type: 'text', text: val('in-text') };
+  if (t === 'next') input = { type: 'next' };
+  if (t === 'answer' || t === 'thinking') {
+    const p = S.pick; const occ = p ? { ...p.occurrence } : { messageId: '', contentIndex: 0, toolCallId: '', toolName: '' };
+    if ($('in-stale').checked) occ.messageId = 'stale';
+    if (t === 'answer') { let ans; try { ans = JSON.parse(val('in-answer')); } catch { ans = { kind: 'quiz', correct: true }; } input = { type: 'answer', toolCallId: occ.toolCallId, answer: ans, occurrence: occ }; }
+    else input = { type: 'thinking', problemCallId: occ.toolCallId, occurrence: occ, text: val('in-text') };
+  }
+  $('in-body').value = JSON.stringify({ chatId: S.chat, input }, null, 2);
+}
+function setText(t) { val('in-type', 'text'); val('in-text', t); composeInput(); }
+function setThinking() { val('in-type', 'thinking'); val('in-text', 'Multiply the numerator and denominator by two.'); composeInput(); }
+async function submitTurn() {
+  if (!needChat()) return;
+  const body = J('in-body');
+  const e = await api('POST', '/api/chat', { json: body });
+  if (e.status === 200 && $('in-follow').checked && !/event-stream/.test(e.ct)) await followStream();
+  else if ($('in-follow').checked) loadChat(true);
+}
+async function followStream() {
+  if (!needChat()) return;
+  await api('GET', `/api/chats/${S.chat}/stream`);
+  await loadChat(true); refreshChats();
+}
+async function overlapDemo() {
+  if (!needChat()) return;
+  await api('POST', '/api/chat', { json: { chatId: S.chat, input: { type: 'text', text: '[demo:slow] Please explain.' } } });
+  let partial = false;
+  const streamP = api('GET', `/api/chats/${S.chat}/stream`, { onEvent: ev => { if (ev?.type === 'message_update') partial = true; } });
+  for (let i = 0; i < 40 && !partial; i++) await sleep(250);
+  await api('POST', '/api/chat', { json: { chatId: S.chat, input: { type: 'text', text: 'Issue a second turn during the first.' } } });
+  await api('POST', `/api/chats/${S.chat}/steer`, { json: { input: { type: 'steer', id: 'steer_' + rid(), text: 'Focus on scaling.' } } });
+  await api('POST', '/api/activity/abort', { json: { kind: 'turn', id: S.chat } });
+  await streamP; await loadChat();
+}
+async function deleteChat() {
+  if (!needChat() || !confirm('Delete chat ' + S.chat + '?')) return;
+  const m = val('ch-delmode');
+  const e = await api('DELETE', `/api/chats/${S.chat}` + (m ? `?mode=${m}` : ''));
+  if (e.status === 200) { S.chat = ''; S.chatData = null; refreshChats(); }
+}
+async function downloadMarkdown() {
+  if (!needChat()) return;
+  const e = await api('GET', `/api/chats/${S.chat}/markdown`);
+  const fn = (e.headers?.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'chat.md';
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([e.body], { type: 'text/markdown' })); a.download = fn; a.click();
+}
+
+/* ---------------- side chats ---------------- */
+function fillAnchor(quietly) {
+  const d = S.chatData; if (!d) { if (!quietly) alert('Load a chat first.'); return; }
+  const m = [...d.messages].reverse().find(x => x.role === 'assistant' && x.id); if (!m) return;
+  const txt = Array.isArray(m.content) ? (m.content.find(p => p.type === 'text')?.text || 'Multiply both parts by the same number.') : String(m.content);
+  $('sd-anchor').value = JSON.stringify({ messageId: m.id, partId: m.id + '-t0', blockIndex: 0, blockText: txt.slice(0, 200) }, null, 2);
+}
+async function listSide() {
+  if (!needChat()) return;
+  const e = await api('GET', `/api/chats/${S.chat}/side-chats`);
+  const threads = e.data?.threads || e.data?.sideChats || (Array.isArray(e.data) ? e.data : []);
+  S.threads = threads;
+  $('sideTable').innerHTML = threads.length ? `<table><tr><th>Thread</th><th>Open</th><th>Messages</th></tr>${threads.map(t =>
+    `<tr class="pick ${t.id === S.thread ? 'sel' : ''}" onclick="selThread('${esc(t.id)}')"><td class="mono">${esc(t.id)}</td><td>${esc(t.open)}</td><td>${(t.messages || []).length}</td></tr>`).join('')}</table>` : '<p class="hint">No threads (see response pane for the raw shape).</p>';
+}
+function selThread(id) { S.thread = id; $('sd-thr').textContent = id; $('sd-follow').checked = true; listSideRender(); }
+function listSideRender() { document.querySelectorAll('#sideTable tr.pick').forEach(tr => tr.classList.toggle('sel', tr.textContent.includes(S.thread))); }
+async function askSide() {
+  if (!needChat()) return;
+  const body = { requestId: 'req_' + rid(), text: val('sd-text') };
+  if ($('sd-follow').checked && S.thread) body.threadId = S.thread; else body.anchor = J('sd-anchor');
+  const slow = body.text.startsWith('[demo:slow]');
+  await api('POST', `/api/chats/${S.chat}/side-chats`, { json: body, onEvent: ev => {
+    if (ev.type === 'thread' && ev.thread?.id) { S.thread = ev.thread.id; $('sd-thr').textContent = S.thread; }
+  } });
+  if (!slow) listSide();
+}
+
+/* ---------------- events ---------------- */
+let evEntry = null;
+async function toggleEvents() {
+  if (evEntry?.streaming) { evEntry.ctrl.abort(); return; }
+  $('evBtn').textContent = 'Disconnect';
+  evEntry = null;
+  const p = api('GET', '/api/events', { onLine: (line, e) => { evEntry = e; if (line.trim()) { $('evLog').textContent += `${new Date().toLocaleTimeString()}  ${line}\n`; $('evLog').parentElement.scrollTop = 1e9; } } });
+  setTimeout(() => { if (!evEntry) evEntry = HIST[0]; }, 50);
+  await p; $('evBtn').textContent = 'Connect';
+}
+
+/* ---------------- graph ---------------- */
+async function importFiles() {
+  const files = $('gi-files').files; if (!files.length) return alert('Choose files first.');
+  const fd = new FormData(); const paths = val('gi-paths').split(',').map(s => s.trim()).filter(Boolean);
+  [...files].forEach((f, i) => { fd.append('files', f, f.name); if (paths.length) fd.append('paths', paths[i] ?? f.name); });
+  await api('POST', '/api/graph/import', { form: fd }); loadGraphQuiet();
+}
+async function importSample() {
+  const fd = new FormData();
+  fd.append('files', new File(['# Equivalent fractions\nOne half is two quarters.\n'], 'fractions.md', { type: 'text/markdown' }));
+  fd.append('paths', 'course/fractions.md');
+  await api('POST', '/api/graph/import', { form: fd }); loadGraphQuiet(); loadSourcesQuiet();
+}
+async function loadGraph() { const e = await api('GET', '/api/graph'); renderGraph(e.data); }
+async function loadGraphQuiet() { const e = await quietGet('/api/graph'); renderGraph(e?.data); }
+function renderGraph(g) {
+  if (!g) return; S.graph = g;
+  const props = g.propositions || [], chains = g.chains || [];
+  $('graphView').innerHTML = `<p class="hint">${props.length} propositions · ${chains.length} chains · ${(g.edges || []).length} edges</p>` +
+    (props.length ? `<table><tr><th>Proposition</th><th>ID</th></tr>${props.map(p => `<tr><td>${esc(p.name)}<div class="hint">${esc(p.statement || p.text || '').slice(0, 160)}</div></td><td class="mono">${esc(p.id)}</td></tr>`).join('')}</table>` : '') +
+    (chains.length ? `<table style="margin-top:8px"><tr><th>Chain</th><th>ID</th></tr>${chains.map(c => `<tr><td>${esc(c.name || c.conclusion || JSON.stringify(c).slice(0, 120))}</td><td class="mono">${esc(c.id)}</td></tr>`).join('')}</table>` : '');
+  $('g-node').innerHTML = [...props.map(p => [p.id, 'proposition · ' + (p.name || '')]), ...chains.map(c => [c.id, 'chain · ' + (c.name || c.id)])].map(([id, l]) => `<option value="${esc(id)}">${esc(l)}</option>`).join('');
+}
+async function pollStatus() {
+  for (let i = 0; i < 60; i++) { const e = await api('GET', '/api/graph/status'); if (!(e.data?.runs || []).length) break; await sleep(500); }
+  loadGraphQuiet();
+}
+async function loadSources() { const e = await api('GET', '/api/graph/sources'); renderSources(e.data); }
+async function loadSourcesQuiet() { const e = await quietGet('/api/graph/sources'); renderSources(e?.data); }
+function renderSources(d) {
+  if (!d) return; const src = d.sources || [];
+  $('srcView').innerHTML = src.length ? `<table><tr><th>Name</th><th>File path</th><th>ID</th></tr>${src.map(s => `<tr><td>${esc(s.name)}</td><td class="mono">${esc(s.filePath)}</td><td class="mono">${esc(s.id)}</td></tr>`).join('')}</table>` : '<p class="hint">No sources.</p>';
+  $('s-id').innerHTML = src.map(s => `<option value="${esc(s.id)}">${esc(s.name || s.filePath || s.id)}</option>`).join('');
+  if (src[0]) { val('s-org', JSON.stringify({ action: 'rename-source', id: src[0].id, name: 'Fractions lecture notes' })); val('ab-id', src[0].id); }
+}
+
+/* ---------------- settings ---------------- */
+async function loadPrompts() {
+  const e = await api('GET', '/api/settings/prompts'); const d = e.data || {};
+  const paths = []; for (const [k, v] of Object.entries(d)) if (Array.isArray(v)) v.forEach(x => x?.path && paths.push([x.path, k]));
+  $('pr-path').innerHTML = paths.map(([p, k]) => `<option value="${esc(p)}">${esc(k)} · ${esc(p)}</option>`).join('');
+}
+const THEME_SLOTS = 'background accent surface bold border italic text code textMuted error success warning'.split(' ');
+async function createTheme() {
+  const colors = Object.fromEntries(THEME_SLOTS.map(s => [s, val('th-col')]));
+  const e = await api('POST', '/api/themes', { json: { name: val('th-name'), mode: val('th-mode'), colors } });
+  if (e.data?.theme?.id) val('th-id', e.data.theme.id);
+}
+
+/* ---------------- raw ---------------- */
+function rawSend() {
+  const b = val('r-b');
+  api(val('r-m'), val('r-p'), { json: b ? J('r-b') : undefined, auth: val('r-a'), customAuth: val('r-ah') });
+}
+
+/* ---------------- boot ---------------- */
+buildNav(); renderLogTabs(); renderCoverage();
+let startPage = 'runtime'; try { startPage = localStorage.getItem('naru.page') || 'runtime'; } catch {}
+show(document.querySelector(`section[data-page="${startPage}"]`) ? startPage : 'runtime');
+pollState(); pollReady(); refreshChats();
+setInterval(pollState, 2500); setInterval(pollReady, 4000); setInterval(pollLogs, 1000);
+</script>
+</body>
+</html>

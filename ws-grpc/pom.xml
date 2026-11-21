@@ -1,0 +1,25 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.naruprof</groupId><artifactId>naruprof-naru</artifactId><version>1.0.0</version></parent>
+  <artifactId>ws-grpc</artifactId>
+  <dependencies>
+    <dependency><groupId>org.naruprof</groupId><artifactId>service-api</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>io.grpc</groupId><artifactId>grpc-netty-shaded</artifactId><version>1.75.0</version></dependency>
+    <dependency><groupId>io.grpc</groupId><artifactId>grpc-protobuf</artifactId><version>1.75.0</version></dependency>
+    <dependency><groupId>io.grpc</groupId><artifactId>grpc-stub</artifactId><version>1.75.0</version></dependency>
+    <dependency><groupId>javax.annotation</groupId><artifactId>javax.annotation-api</artifactId><version>1.3.2</version></dependency>
+    <dependency><groupId>io.grpc</groupId><artifactId>grpc-inprocess</artifactId><version>1.75.0</version><scope>test</scope></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+  </dependencies>
+  <properties><protoc.classifier>linux-x86_64</protoc.classifier></properties>
+  <build>
+    <plugins><plugin><groupId>org.xolstice.maven.plugins</groupId><artifactId>protobuf-maven-plugin</artifactId><version>0.6.1</version>
+      <configuration>
+        <protocArtifact>com.google.protobuf:protoc:3.25.8:exe:${protoc.classifier}</protocArtifact>
+        <pluginId>grpc-java</pluginId>
+        <pluginArtifact>io.grpc:protoc-gen-grpc-java:1.75.0:exe:${protoc.classifier}</pluginArtifact>
+      </configuration>
+      <executions><execution><goals><goal>compile</goal><goal>compile-custom</goal></goals></execution></executions>
+    </plugin></plugins>
+  </build>
+</project>

@@ -1,0 +1,547 @@
+package net.thevpc.naru.impl.registry;
+
+import net.thevpc.naru.api.agent.NaruLogMode;
+import net.thevpc.naru.api.agent.NaruSession;
+import net.thevpc.naru.api.context.NaruContextCompactor;
+import net.thevpc.naru.api.task.NaruTask;
+import net.thevpc.naru.api.mode.NaruPromptMode;
+import net.thevpc.naru.api.model.*;
+import net.thevpc.naru.api.registry.*;
+import net.thevpc.naru.impl.ia.mode.NaruModeRegistry;
+import net.thevpc.nuts.elem.NObjectElement;
+import net.thevpc.nuts.elem.NPairElement;
+import net.thevpc.nuts.ext.NExtensions;
+import net.thevpc.nuts.text.NMsg;
+import net.thevpc.nuts.util.*;
+
+import java.util.*;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+
+/**
+ * Registry of all tools available to the agent.
+ *
+ * <p>Tools are kept in insertion order so the model always sees them in a
+ * deterministic sequence.
+ */
+public class NaruRegistryImpl implements NaruRegistry {
+
+    private final Map<String, NaruToolsetProvider> toolsetProviders = new LinkedHashMap<>();
+    private final Map<String, NaruDirectiveProvider> directiveProviders = new LinkedHashMap<>();
+    private final Map<String, NaruToolTagProvider> toolTagProviders = new LinkedHashMap<>();
+    private final List<NaruToolset> activeToolsets = new ArrayList<>();
+    private final Set<NaruToolset> openedToolsets = Collections.newSetFromMap(new IdentityHashMap<>());
+    //    private final Map<String, NaruTool> tools = new LinkedHashMap<>();
+    private final Map<String, NaruDirective> availableDirectives = new LinkedHashMap<>();
+    private final Map<String, NaruToolTag> availableToolTags = new LinkedHashMap<>();
+    private final Map<String, String> directiveAliases = new LinkedHashMap<>();
+    private final Map<String, NaruModelProvider> modelProviders = new HashMap<>();
+    private final List<NaruSessionExtension> sessionExtensions = new ArrayList<>();
+    private final List<NaruContextCompactor> compactors = new ArrayList<>();
+    private final NaruModeRegistry modeRegistry = new NaruModeRegistry();
+    private final NaruSession session;
+    private final Predicate<NaruDirective> directiveFilter;
+    private final Predicate<NaruTool> toolFilter;
+    private final Predicate<NaruToolTag> tagFilter;
+
+    public NaruRegistryImpl(NaruSession session
+            ,Predicate<NaruDirective> directiveFilter
+            ,Predicate<NaruTool> toolFilter
+            ,Predicate<NaruToolTag> tagFilter
+    ) {
+        this.session = session;
+        this.directiveFilter = directiveFilter;
+        this.toolFilter = toolFilter;
+        this.tagFilter = tagFilter;
+    }
+
+    @Override
+    public List<NaruPromptMode> modes() {
+        return modeRegistry.modes();
+    }
+
+    @Override
+    public List<String> modeNames() {
+        return modes().stream().map(x -> NNameFormat.LOWER_KEBAB_CASE.format(x.name())).collect(Collectors.toList());
+    }
+
+    @Override
+    public List<String> modeNamesAndAliases() {
+        List<String> all = new ArrayList<>();
+        for (NaruPromptMode mode : modes()) {
+            all.add(NNameFormat.LOWER_KEBAB_CASE.format(mode.name()));
+            for (String alias : mode.aliases()) {
+                all.add(NNameFormat.LOWER_KEBAB_CASE.format(alias));
+            }
+        }
+        return all;
+    }
+
+    @Override
+    public void declareMode(NaruPromptMode mode) {
+        modeRegistry.register(mode);
+    }
+
+    @Override
+    public NOptional<NaruPromptMode> mode(String mode) {
+        return modeRegistry.mode(mode);
+    }
+
+
+    @Override
+    public NaruRegistry registerDirectiveProvider(NaruDirectiveProvider directiveProvider) {
+        if (directiveProviders.containsKey(directiveProvider.name())) {
+            throw new IllegalArgumentException("directive provider " + directiveProvider.name() + " already registered");
+        }
+        directiveProviders.put(directiveProvider.name(), directiveProvider);
+        for (NaruDirective directive : directiveProvider.directives()) {
+            registerDirective(directive);
+        }
+        return this;
+    }
+
+    @Override
+    public NaruRegistry registerToolTagProvider(NaruToolTagProvider toolTagProvider) {
+        String n = NNameFormat.LOWER_KEBAB_CASE.format(toolTagProvider.name());
+        if (toolTagProviders.containsKey(n)) {
+            throw new IllegalArgumentException("tool tag provider " + n + " already registered");
+        }
+        toolTagProviders.put(n, toolTagProvider);
+        for (NaruToolTag directive : toolTagProvider.tags()) {
+            registerToolTag(directive);
+        }
+        return this;
+    }
+
+
+    @Override
+    public NaruRegistry registerToolsetProvider(NaruToolsetProvider tool) {
+        toolsetProviders.put(tool.name(), tool);
+        NObjectElement e = session.agent().env().get("toolset." + tool.name()).map(x -> {
+            if (x instanceof NObjectElement) {
+                return (NObjectElement) x;
+            }
+            return NObjectElement.ofEmpty();
+        }).orElse(NObjectElement.ofEmpty());
+        List<NPairElement> pairs = e.namedPairs();
+        for (NPairElement p : pairs) {
+            NObjectElement config = p.value().asObject().orElse(NObjectElement.ofEmpty());
+            String id = p.key().asStringValue().orNull();
+            if (tool.accept(id, config)) {
+                registerToolset(tool.createToolset(id, config));
+            }
+        }
+        if (pairs.isEmpty()) {
+            for (String t : tool.supportedTypes()) {
+                NObjectElement config = e.get(t).map(x -> x.asObject().orElse(NObjectElement.ofEmpty())).orElse(NObjectElement.ofEmpty());
+                if (tool.accept(t, config)) {
+                    registerToolset(tool.createToolset(t, config));
+                }
+            }
+        }
+        return this;
+    }
+
+    public NaruRegistry registerToolset(NaruToolset toolset) {
+        activeToolsets.add(toolset);
+        if (session.isRunning()) {
+            openToolset(toolset);
+        }
+        return this;
+    }
+
+    public void openToolsets() {
+        try {
+            for (NaruToolset toolset : activeToolsets) {
+                openToolset(toolset);
+            }
+        } catch (RuntimeException | Error ex) {
+            closeToolsets();
+            throw ex;
+        }
+    }
+
+    private void openToolset(NaruToolset toolset) {
+        if (openedToolsets.add(toolset)) {
+            try {
+                toolset.open(session);
+            } catch (RuntimeException | Error ex) {
+                openedToolsets.remove(toolset);
+                try {
+                    toolset.close();
+                } catch (Exception closeError) {
+                    ex.addSuppressed(closeError);
+                }
+                throw ex;
+            }
+        }
+    }
+
+    public NOptional<NaruTool> findTool(String name) {
+        for (NaruToolset a : activeToolsets) {
+            for (NaruTool tool : a.tools()) {
+                if (tool.name().equals(name)) {
+                    return NOptional.of(tool);
+                }
+            }
+        }
+        return NOptional.ofNamedEmpty(NMsg.ofC("tool '%s'", name));
+    }
+
+    public Map<String, NaruTool> tools() {
+        Map<String, NaruTool> all = new LinkedHashMap<>();
+        for (NaruToolset a : activeToolsets) {
+            for (NaruTool tool : a.tools()) {
+                all.put(tool.name(), tool);
+            }
+        }
+        return all;
+    }
+
+    public Map<String, NaruDirective> directives() {
+        return availableDirectives;
+    }
+
+
+    private NaruRegistry registerDirective(NaruDirective directive) {
+        if(directive==null){
+            return this;
+        }
+        if (directiveFilter != null) {
+            if(!directiveFilter.test(directive)) {
+                return this;
+            }
+        }
+        availableDirectives.put(directive.name(), directive);
+        for (String alias : directive.getAliases()) {
+            String old = directiveAliases.get(alias);
+            if (old != null && !old.equals(directive.name())) {
+                throw new IllegalArgumentException("alias " + alias + " is already used by " + old);
+            }
+            directiveAliases.put(alias, directive.name());
+        }
+        return this;
+    }
+
+    private NaruRegistry registerToolTag(NaruToolTag tool) {
+        if (tagFilter != null) {
+            if(!tagFilter.test(tool)) {
+                return this;
+            }
+        }
+        String n = NNameFormat.LOWER_KEBAB_CASE.format(tool.name());
+        if (!availableToolTags.containsKey(n)) {
+            availableToolTags.put(n, tool);
+        } else {
+            //just ignore?
+        }
+        return this;
+    }
+
+    @Override
+    public NaruRegistry registerModelProvider(NaruModelProvider provider) {
+        modelProviders.put(NStringUtils.strip(provider.name()).toLowerCase(), provider);
+        return this;
+    }
+
+    public Map<String, NaruModelProvider> modelProviders() {
+        return modelProviders;
+    }
+
+    @Override
+    public List<NaruModelInfo> modelsInfos(NaruSession session) {
+        ArrayList<NaruModelInfo> a = new ArrayList<>();
+        // iterate modelsKeys() so that the (provider,model) order is *identical* to the
+        // one used to resolve positional indexes. Any drift here silently maps
+        // '/model use <n>' to a different model than the one displayed at position <n>.
+        for (NaruModelKey k : modelsKeys(session)) {
+            NaruModelProvider p = modelProviders.get(k.provider().toLowerCase());
+            if (p == null) {
+                continue;
+            }
+            NaruModelCapabilities c = p.getProtocol(new NaruModelConfig(
+                    p.name(),
+                    k.model()
+            ), session).get().getCapabilities();
+            a.add(new NaruModelInfo(p.name(), k.model(), c));
+        }
+        return a;
+    }
+
+    @Override
+    public List<NaruModelKey> modelsKeys(NaruSession session) {
+        // LinkedHashSet: a provider may report the same (provider,model) twice (e.g. a
+        // custom endpoint whose id collides with a cloud provider). Duplicates would make
+        // positional indexes ambiguous, so only the first occurrence is kept.
+        Set<NaruModelKey> set = new LinkedHashSet<>();
+        for (NaruModelProvider p : modelProviders.values()) {
+            if (!p.isAvailable(session)) {
+                continue;
+            }
+            if (!p.isEnabled()) {
+                // enabled=false hides an instance from every listing and from index
+                // resolution: a registration switched off selects nothing at all
+                continue;
+            }
+            List<String> ids;
+            try {
+                ids = p.findModelIds(session);
+            } catch (RuntimeException e) {
+                // a single unreachable provider must not break listing for all the others
+                ids = Collections.emptyList();
+            }
+            Set<String> declared = declaredModels(p);
+            if (declared != null) {
+                // design §7: --model=/--models= pins the instance to a declared subset;
+                // whatever the type enumerates outside of it is not selectable under
+                // this instance id
+                ids = ids.stream().filter(declared::contains).collect(Collectors.toList());
+            }
+            for (String m : ids) {
+                if (!NBlankable.isBlank(m)) {
+                    set.add(new NaruModelKey(p.name(), m));
+                }
+            }
+        }
+        List<NaruModelKey> a = new ArrayList<>(set);
+        // (provider,model) is now unique => this is a total order => a stable index
+        a.sort(Comparator.comparing(NaruModelKey::provider).thenComparing(NaruModelKey::model));
+        return a;
+    }
+
+    /**
+     * The model ids an instance declares through its {@code model}/{@code models}
+     * params (a registration's pin / subset), or null when it declares none and
+     * therefore lists whatever its type enumerates.
+     */
+    private static Set<String> declaredModels(NaruModelProvider p) {
+        Set<String> out = new LinkedHashSet<>();
+        boolean any = false;
+        String single = p.rawParam("model").orNull();
+        if (!NBlankable.isBlank(single)) {
+            any = true;
+            for (String s : single.split("[,\\s]+")) {
+                if (!s.isBlank()) {
+                    out.add(s.trim());
+                }
+            }
+        }
+        String many = p.rawParam("models").orNull();
+        if (!NBlankable.isBlank(many)) {
+            any = true;
+            for (String s : many.split("[,\\s]+")) {
+                if (!s.isBlank()) {
+                    out.add(s.trim());
+                }
+            }
+        }
+        return any ? out : null;
+    }
+
+    @Override
+    public NOptional<NaruModelProvider> provider(String provider) {
+        return NOptional.ofNamed(modelProviders.get(NStringUtils.strip(provider).toLowerCase()), provider);
+    }
+
+    @Override
+    public NOptional<NaruModelProtocol> protocol(NaruModelConfig model, NaruSession session) {
+        return provider(model.provider())
+                .flatMap(p -> p.getProtocol(model, session));
+    }
+
+    @Override
+    public NOptional<NaruModelKey> findModel(String keyOrName, NaruSession session) {
+        // single resolution path: the session also honours the last '/model' listing
+        // snapshot, which this method could not know about.
+        return session.findModel(keyOrName).map(NaruModelConfig::key);
+    }
+
+    /**
+     * Dispatch a tool call by name and return its string result.
+     *
+     * @throws IllegalArgumentException if the tool name is unknown
+     */
+    @Override
+    public String dispatch(String name, Map<String, Object> arguments, NaruTask task) {
+
+        NaruTool tool = findTool(name).orNull();
+        if (tool == null) {
+            return "ERROR: Unknown tool '" + name + "'. Available tools: " + tools().keySet().stream().sorted().collect(Collectors.joining(", "));
+        }
+        try {
+            return tool.execute(new NaruToolCallContextImpl(arguments, task));
+        } catch (Exception e) {
+            return "ERROR executing tool '" + name + "': " + e.getMessage();
+        }
+    }
+
+    public NOptional<NaruDirective> findDirective(String name) {
+        NaruDirective d = availableDirectives.get(name);
+        if (d == null) {
+            String s = directiveAliases.get(name);
+            if (s != null) {
+                d = availableDirectives.get(s);
+            }
+            if (d == null) {
+                return NOptional.ofNamedEmpty(NMsg.ofC("directive '%s'", name));
+            }
+        }
+        return NOptional.of(d);
+    }
+
+    @Override
+    public void dispatchSlash(String name, String argument, NaruTask task) {
+        NaruDirective dir = findDirective(name).orNull();
+        if (dir == null) {
+            task.log(NaruLogMode.TRACE, NMsg.ofC("ERROR: Unknown tool '" + name + "'. Available tools: " + availableDirectives.keySet()).asError());
+            return;
+        }
+        task.invokeDirective(dir,new NaruDirectiveCallContextImpl(name, argument, task));
+    }
+
+    /**
+     * Dispatch a tool call by name and return its string result.
+     *
+     * @throws IllegalArgumentException if the tool name is unknown
+     */
+    @Override
+    public String dispatch(NaruToolCall toolCall, NaruTask context) {
+        return dispatch(toolCall.getName(), toolCall.getArguments(), context);
+    }
+
+    @Override
+    public boolean isEmpty() {
+        if (!toolsetProviders.isEmpty()) {
+            return false;
+        }
+        if (!activeToolsets.isEmpty()) {
+            return false;
+        }
+        if (!availableDirectives.isEmpty()) {
+            return false;
+        }
+        if (!directiveAliases.isEmpty()) {
+            return false;
+        }
+        if (!modelProviders.isEmpty()) {
+            return false;
+        }
+        return tools().isEmpty();
+    }
+
+    @Override
+    public Map<String, NaruToolTag> availableTags() {
+        return new HashMap<>(availableToolTags);
+    }
+
+    @Override
+    public NOptional<NaruToolTag> findAvailableTag(String name) {
+                return NOptional.ofNamed(availableToolTags.get(NNameFormat.LOWER_KEBAB_CASE.format(name)), name);
+    }
+
+    @Override
+    public Set<String> toolNames() {
+        return Collections.unmodifiableSet(tools().keySet());
+    }
+
+    @Override
+    public List<NaruSessionExtension> sessionExtensions() {
+        return Collections.unmodifiableList(sessionExtensions);
+    }
+
+    @Override
+    public <T extends NaruSessionExtension> NOptional<T> extension(String name, Class<T> as) {
+        if (name == null) {
+            return NOptional.ofNamedEmpty(NMsg.ofC("session extension '%s'", name));
+        }
+        for (NaruSessionExtension e : sessionExtensions) {
+            if (e.name().equals(name) && as.isInstance(e)) {
+                return NOptional.of(as.cast(e));
+            }
+        }
+        return NOptional.ofNamedEmpty(NMsg.ofC("session extension '%s'", name));
+    }
+
+    @Override
+    public void close() {
+        closeToolsets();
+        for (NaruSessionExtension e : sessionExtensions) {
+            try {
+                e.close();
+            } catch (Exception ex) {
+                // a misbehaving extension must not prevent the others from closing
+                session.log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed to close: %s", e.name(), ex.getMessage()).asError());
+            }
+        }
+    }
+
+    public void closeToolsets() {
+        for (NaruToolset toolset : activeToolsets) {
+            if (openedToolsets.remove(toolset)) {
+                try {
+                    toolset.close();
+                } catch (Exception ex) {
+                    session.log(NaruLogMode.SCRIPT, NMsg.ofC(
+                            "toolset '%s' failed to close: %s", toolset.id(), ex.getMessage()).asError());
+                }
+            }
+        }
+    }
+
+    public NaruRegistry registerDefaults() {
+        this.registerToolsetProvider(new NaruBuiltinToolsetProvider());
+        this.registerDirectiveProvider(new NaruBuiltinDirectiveProvider());
+        this.registerToolTagProvider(new NaruBuiltinToolTagProvider());
+        for (NaruToolTagProvider provider : NExtensions.of().createAllSupported(NaruToolTagProvider.class, null)) {
+            this.registerToolTagProvider(provider);
+        }
+        for (NaruToolsetProvider provider : NExtensions.of().createAllSupported(NaruToolsetProvider.class, null)) {
+            this.registerToolsetProvider(provider);
+        }
+        for (NaruDirectiveProvider provider : NExtensions.of().createAllSupported(NaruDirectiveProvider.class, null)) {
+            this.registerDirectiveProvider(provider);
+        }
+        for (NaruModelProvider provider : NExtensions.of().createAllSupported(NaruModelProvider.class, null)) {
+            this.registerModelProvider(provider);
+        }
+        for (NaruPromptMode mode : NExtensions.of().createAllSupported(NaruPromptMode.class, null)) {
+            this.declareMode(mode);
+        }
+        // Unlike the loops above, these instances are retained: a session extension owns
+        // mutable per-session state, so the very same object has to answer the prompt,
+        // load and save hooks. Creating them per-lookup would silently split the state.
+        for (NaruSessionExtension extension : NExtensions.of().createAllSupported(NaruSessionExtension.class, null)) {
+            if (sessionExtensions.stream().anyMatch(x -> x.name().equals(extension.name()))) {
+                continue;
+            }
+            sessionExtensions.add(extension);
+        }
+        sessionExtensions.sort(Comparator.comparingInt(NaruSessionExtension::order));
+        // Compactors are session-agnostic and stateless between calls, so unlike session
+        // extensions they are resolved per lookup rather than retained. That keeps a
+        // compactor free of session state it would otherwise be tempted to cache, which is
+        // what lets one instance serve sibling tasks concurrently.
+        for (NaruContextCompactor compactor : NExtensions.of().createAllSupported(NaruContextCompactor.class, null)) {
+            if (!compactors.isEmpty()) {
+                // first discovered wins, matching the registration order of every other SPI
+                // here: a second compactor on the classpath would otherwise silently
+                // depend on ServiceLoader ordering to be the chosen one
+                continue;
+            }
+            compactors.add(compactor);
+        }
+        return this;
+    }
+
+    @Override
+    public NOptional<NaruContextCompactor> compactor() {
+        if (compactors.isEmpty()) {
+            return NOptional.ofNamedEmpty(NMsg.ofC("no context compactor is installed"));
+        }
+        return NOptional.of(compactors.get(0));
+    }
+
+    // ── Convenience factory ────────────────────────────────────────────────────
+
+}

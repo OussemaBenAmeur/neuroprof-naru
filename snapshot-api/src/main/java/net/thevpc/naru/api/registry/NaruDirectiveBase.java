@@ -1,0 +1,360 @@
+package net.thevpc.naru.api.registry;
+
+import net.thevpc.naru.api.agent.NaruLogMode;
+import net.thevpc.naru.api.agent.NaruSession;
+import net.thevpc.naru.api.routine.NaruStmtResult;
+import net.thevpc.naru.api.task.NaruTask;
+import net.thevpc.nuts.cmdline.*;
+import net.thevpc.nuts.expr.NExprContext;
+import net.thevpc.nuts.expr.NExprContextBuilder;
+import net.thevpc.nuts.text.NMsg;
+import net.thevpc.nuts.text.NText;
+import net.thevpc.nuts.util.*;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+public abstract class NaruDirectiveBase implements NaruDirective {
+    private final String name;
+    private final String group;
+    private final String description;
+    private final String[] aliases;
+    private final Map<String, SubCommand> subCommands = new HashMap<>();
+    private String noCommand;
+
+    public NaruDirectiveBase(String name, String group, String description, String... aliases) {
+        this.name = name;
+        this.group = group;
+        this.description = description;
+        this.aliases = aliases;
+    }
+
+    public String noCommand() {
+        return noCommand;
+    }
+
+    public NaruDirectiveBase noCommand(String noCommand) {
+        this.noCommand = noCommand;
+        return this;
+    }
+
+    protected void register(SubCommand sc) {
+        SubCommand o = subCommands.get(sc.name());
+        if (o != null) {
+            throw new NIllegalArgumentException(NMsg.ofC("duplicate subcommand " + sc.name()));
+        }
+        subCommands.put(sc.name(), sc);
+    }
+
+    protected NOptional<SubCommand> subCommand(String name) {
+        return NOptional.ofNamed(subCommands.get(name), NMsg.ofC("subcommand %s", name));
+    }
+
+    /**
+     * Every registered subcommand, for a subclass' own {@link #resolveCandidates}
+     * to complete subcommand names (with descriptions) before delegating the
+     * deeper words to the subcommands themselves.
+     */
+    protected Collection<SubCommand> registeredSubCommands() {
+        return subCommands.values();
+    }
+
+    @Override
+    public String group() {
+        return group;
+    }
+
+    @Override
+    public String[] getAliases() {
+        return aliases;
+    }
+
+    @Override
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public String getDescription() {
+        return description;
+    }
+
+    protected void addCandidates(List<NArgCompleteCandidate> candidates, String prefix, String... options) {
+        for (String option : options) {
+            if (option.startsWith(prefix)) {
+                candidates.add(NArgCompleteCandidate.of(option));
+            }
+        }
+    }
+
+    @Override
+    public NaruStmtResult execute(NaruDirectiveCallContext context) {
+        NaruTask task = context.task();
+        // Resolve {{var}} moustache templates in the directive argument against the
+        // task's variables (frame locals -> task env -> session env) BEFORE any
+        // cmdline parsing, so naru scripts can feed the result of one step into the
+        // next, e.g. "/system mvn -o -q -f {{pom}} test" or "/file read {{target}}".
+        // The moustache syntax deliberately avoids clashing with shell '$' variables
+        // inside /system commands. Undefined variables / malformed templates are left
+        // untouched so a stray "{{" never breaks a script.
+        String argument = context.argument();
+        String resolved = resolveTemplates(task, argument);
+        if (Objects.equals(resolved,argument)) {
+            final NaruDirectiveCallContext base = context;
+            final String resolvedArgument = resolved;
+            context = new NaruDirectiveCallContext() {
+                @Override
+                public String name() {
+                    return base.name();
+                }
+
+                @Override
+                public String argument() {
+                    return resolvedArgument;
+                }
+
+                @Override
+                public NaruTask task() {
+                    return base.task();
+                }
+            };
+        }
+        if (subCommands.size() == 1) {
+            SubCommand s1 = (SubCommand) (subCommands.values().toArray()[0]);
+            if (s1.name().isEmpty()) {
+                String arg = context.argument() == null ? "" : context.argument().trim();
+                if (/*arg.length() == 0 || */arg.equals("help") || arg.equals("--help")) {
+                    return executeHelp(context, NCmdLine.of(""));
+                }
+                NCmdLine cmdLine = NCmdLine.of("");
+                try {
+                    cmdLine = NCmdLine.parse(context.argument()).get();
+                } catch (Exception ignore) {
+                    // the argument is raw text (e.g. /sh or /system shell commands
+                    // with quotes/operators) that is NOT well-formed NCmdLine; such
+                    // directives read context.argument() directly, so an empty
+                    // cmdLine is fine and must not fail the whole call.
+                }
+                return s1.execute(context, cmdLine);
+            }
+        }
+        NCmdLine cmdLine;
+        try {
+            cmdLine = NCmdLine.parse(context.argument()).get();
+        } catch (Exception e) {
+            // e.g. unsupported quoting or stray characters in model-generated
+            // arguments; report it instead of crashing the whole directive.
+            NMsg msg = NMsg.ofC("invalid /%s syntax: %s", name(), context.argument());
+            task.log(NaruLogMode.AGENT_RESPONSE,
+                    msg);
+            return NaruStmtResult.ofError(msg.toString());
+        }
+        if (cmdLine.isEmpty()) {
+            if (!NBlankable.isBlank(noCommand() != null)) {
+                NOptional<SubCommand> cmd = subCommand(noCommand());
+                if (!cmd.isPresent()) {
+                    return NaruStmtResult.ofError(NMsg.ofC("command not found %s %s", name(), noCommand()).toString());
+                }
+                return cmd.get().execute(context, cmdLine);
+            } else {
+                SubCommand emptyCommand = subCommand("").orNull();
+                if (emptyCommand != null) {
+                    return emptyCommand.execute(context, cmdLine);
+                } else {
+                    NMsg msg = NMsg.ofC("invalid command /%s %s", name(), context.argument());
+                    task.log(NaruLogMode.AGENT_RESPONSE, msg);
+                    return NaruStmtResult.ofError(msg.toString());
+                }
+            }
+        } else {
+            NArg a = cmdLine.peek().get();
+            SubCommand s = subCommand(a.image()).orNull();
+            if (s != null) {
+                cmdLine.next().get();
+                return s.execute(context, cmdLine);
+            }
+            if (a.image().equals("help") || a.image().equals("--help")) {
+                cmdLine.next().get();
+                return executeHelp(context, cmdLine);
+            } else {
+                s = subCommand("").orNull();
+                if (s != null) {
+                    return s.execute(context, cmdLine);
+                }
+                NMsg msg = NMsg.ofC("invalid command /%s %s", name(), context.argument());
+                task.log(NaruLogMode.AGENT_RESPONSE, msg);
+                return NaruStmtResult.ofError(msg.toString());
+            }
+        }
+    }
+
+    public NaruStmtResult executeHelp(NaruDirectiveCallContext context, NCmdLine cmdLine) {
+        NaruTask task = context.task();
+        NMsg prefix = NMsg.ofC("%s%s ", NMsg.ofStyledSeparator("/"), NMsg.ofStyledPrimary1(name()));
+        task.log(NaruLogMode.AGENT_RESPONSE, NMsg.ofC("%s %s%s%s", prefix, NMsg.ofStyledSeparator("["), NMsg.ofStyledPale("options..."), NMsg.ofStyledSeparator("]")));
+        task.log(NaruLogMode.AGENT_RESPONSE, NMsg.ofC("    %s", description));
+        StringBuilder sb = new StringBuilder();
+        for (SubCommand value : subCommands.values().stream().sorted(Comparator.comparing(x -> x.name())).collect(Collectors.toList())) {
+            NaruStmtResult z = value.help(context);
+            Object o = z.successValue();
+            if (o instanceof String) {
+                if (!sb.isEmpty()) {
+                    sb.append("\n");
+                }
+                sb.append(o);
+            }
+        }
+        task.log(NaruLogMode.AGENT_RESPONSE, NMsg.ofC("  %s %s %s %s %s %s", prefix
+                , NMsg.ofStyledSeparator("[")
+                , NMsg.ofStyledPrimary4("help")
+                , NMsg.ofStyledSeparator("|")
+                , NMsg.ofStyledPrimary4("--help")
+                , NMsg.ofStyledSeparator("]")
+        ));
+        task.log(NaruLogMode.AGENT_RESPONSE, NMsg.ofC("           show %s help", name()));
+        return NaruStmtResult.ofSuccess(sb.toString());
+    }
+
+    /**
+     * Resolve {@code {{var}}} moustache templates in {@code arg} against the
+     * task's variables (frame locals -&gt; task env -&gt; session env). The original
+     * argument is returned unchanged when nothing needs resolving or when a
+     * variable is unknown, so a stray "{{" never breaks a script or a shell
+     * command.
+     */
+    private static String resolveTemplates(NaruTask task, String arg) {
+        if (arg == null || arg.indexOf("{{") < 0) {
+            return arg;
+        }
+        try {
+            NExprContext ctx = NExprContextBuilder.of()
+                    .declareBuiltins()
+                    .declareMathConstants()
+                    .declareMathFunctions()
+                    .declarePhysicsConstants()
+                    .declareVars(task.varResolver())
+                    .build();
+            String out = ctx.ofTemplate().withMoustacheStyle().compile(arg).runString();
+            return out == null ? arg : out;
+        } catch (Exception ignore) {
+            return arg;
+        }
+    }
+
+    @Override
+    public NArgCompleteResult resolveCandidates(
+            NCmdLine cmdLine,
+            NArgCompletePosition pos,
+            NaruSession session) {
+        List<NArgCompleteCandidate> candidates = new java.util.ArrayList<>();
+        String[] stringArray = cmdLine.toStringArray();
+        int wordIndex = pos.wordIndex();
+        String currentArg = wordIndex < stringArray.length ? stringArray[wordIndex] : "";
+        if (wordIndex == 1) {
+            addCandidates(candidates, currentArg, subCommands.keySet().stream().sorted().toArray(String[]::new));
+        } else if (wordIndex >= 2) {
+            // word 0 is the directive itself ("/session"), word 1 is the sub-command
+            // the user picked. Looking word 0 up here found no sub-command at all,
+            // which is why sub-command completion (and its arguments) never appeared.
+            if (stringArray.length > 1) {
+                SubCommand s = subCommand(stringArray[1]).orNull();
+                if (s == null) {
+                    s = subCommand("").orNull();
+                }
+                if (s != null) {
+                    return s.resolveCandidates(cmdLine, pos, session);
+                }
+            }
+        }
+        return NArgCompleteResult.ofCandidates(candidates);
+    }
+
+    public class SubCommandHelp {
+        private final NText syntax;
+        private final NText description;
+
+        public SubCommandHelp(String syntax, String description) {
+            this.syntax = NText.ofPlain(syntax);
+            this.description = NText.ofPlain(description);
+        }
+
+        public SubCommandHelp(NText syntax, NText description) {
+            this.syntax = syntax;
+            this.description = description;
+        }
+    }
+
+    public abstract class AbstractSubCommand implements SubCommand {
+        private final String name;
+        private final NText description;
+        private final List<SubCommandHelp> helps = new ArrayList<>();
+
+        public AbstractSubCommand(SubCommandHelp... all) {
+            this("", NText.ofPlain(NaruDirectiveBase.this.description), all);
+        }
+
+        public AbstractSubCommand(String name, NText description, SubCommandHelp... all) {
+            this.name = name;
+            this.description = description;
+            this.helps.addAll(Arrays.asList(all));
+        }
+
+        public NText description() {
+            return description;
+        }
+
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public NaruStmtResult help(NaruDirectiveCallContext context) {
+            if (helps.isEmpty()) {
+                return helpOne(context, NText.ofPlain(""), this.description);
+            }
+            NStringBuilder sb = NStringBuilder.of();
+            for (SubCommandHelp help : helps) {
+                NaruStmtResult r = helpOne(context, help.syntax, help.description);
+                sb.println(NStringUtils.strip((String) r.successValue()));
+            }
+            return NaruStmtResult.ofSuccess(sb.toString());
+        }
+
+        public NaruStmtResult helpOne(NaruDirectiveCallContext context, NText syntax, NText description) {
+            NMsg prefix = NMsg.ofC("  %s%s ", NMsg.ofStyledSeparator("/"), NMsg.ofStyledPrimary1(NaruDirectiveBase.this.name()));
+            NStringBuilder sb = NStringBuilder.of();
+            if (name.equals(noCommand)) {
+                NMsg msg = NMsg.ofC("%s", prefix);
+                context.task().log(NaruLogMode.AGENT_RESPONSE, msg);
+                sb.println(msg.toString());
+            }
+            NMsg msg = NMsg.ofC("%s %s %s", prefix, NMsg.ofStyledPrimary4(name()), syntax);
+            context.task().log(NaruLogMode.AGENT_RESPONSE, msg);
+            sb.println(msg.toString());
+            for (NText line : description.splitLines()) {
+                msg = NMsg.ofC("           %s", line);
+                context.task().log(NaruLogMode.AGENT_RESPONSE, msg);
+                sb.println(msg.toString());
+            }
+            return NaruStmtResult.ofSuccess(sb.toString());
+        }
+
+        @Override
+        public NArgCompleteResult resolveCandidates(NCmdLine cmdLine, NArgCompletePosition pos, NaruSession session) {
+            return NArgCompleteResult.ofBlank();
+        }
+    }
+
+    public interface SubCommand {
+        String name();
+
+        NText description();
+
+        NaruStmtResult execute(NaruDirectiveCallContext context, NCmdLine cmdLine);
+
+        NaruStmtResult help(NaruDirectiveCallContext context);
+
+        NArgCompleteResult resolveCandidates(NCmdLine cmdLine, NArgCompletePosition pos, NaruSession session);
+    }
+
+}

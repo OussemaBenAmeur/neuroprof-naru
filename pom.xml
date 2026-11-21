@@ -1,0 +1,22 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>4.0.9</version><relativePath/>
+  </parent>
+  <groupId>org.naruprof</groupId><artifactId>naruprof-naru</artifactId><version>1.0.0</version><packaging>pom</packaging>
+  <properties><java.version>25</java.version><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
+  <modules>
+    <module>infra</module>
+    <module>service-api</module>
+    <module>dal-api</module>
+    <module>service-impl</module>
+    <module>snapshot-api</module>
+    <module>snapshot-engine</module>
+    <module>dal-naru</module>
+    <module>dal-jpa</module>
+    <module>ws-rest</module>
+    <module>ws-grpc</module>
+    <module>app</module>
+    <module>contract-tests</module>
+  </modules>
+</project>

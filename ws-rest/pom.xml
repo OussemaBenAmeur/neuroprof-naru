@@ -1,0 +1,9 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.naruprof</groupId><artifactId>naruprof-naru</artifactId><version>1.0.0</version></parent>
+  <artifactId>ws-rest</artifactId>
+  <dependencies>
+    <dependency><groupId>org.naruprof</groupId><artifactId>service-api</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
+  </dependencies>
+</project>

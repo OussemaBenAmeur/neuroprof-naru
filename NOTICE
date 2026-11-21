@@ -1,0 +1,5 @@
+LearnHarness prompts, compatibility behavior and fixtures derive from LearnHarness
+0.6.1, commit cb25c8e49b85eed9e78315584731cad73a0118a6, Amos Blomqvist
+and contributors. See LICENSE-LearnHarness (AGPL-3.0-only).
+snapshot-api and snapshot-engine compile the supplied NARU sources at
+68412108a0526e84785994972a694e861f2ac321. See LICENSE-NARU.

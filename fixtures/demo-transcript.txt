@@ -1,0 +1,118 @@
+Measured in-process rehearsal
+Spring DispatcherServlet, real NARU task execution, scripted model and in-memory transaction fixture.
+Live TCP streaming timing, the production JPA store and gRPC sockets were outside this run.
+
+1. Check the private HTTP listener and the scripted provider selection
+GET /internal/health/live 401
+GET /internal/health/live 200
+GET /internal/health/ready 200
+GET /api/models 200
+  Selected models {"strong": {"model": {"provider": "learning", "id": "fixture"}}, "cheap": {"model": {"provider": "learning", "id": "fixture"}}, "vision": {"model": {"provider": "learning", "id": "fixture"}}}
+GET /api/chats 200
+
+2. Ask a question, reopen the probe, reject a stale answer and advance to teaching
+POST /api/chats 200
+POST /api/chat 200
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/stream 200
+  SSE {"type": "agent_start", "messageId": null}
+  SSE {"type": "message_update", "messageId": "msg_10bcd6ef193e4319858bb09885ff03f8"}
+  SSE {"type": "message_end", "messageId": "msg_10bcd6ef193e4319858bb09885ff03f8"}
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5 200
+  Saved probe {"id": "call_probe", "question": "Which fraction equals one half?"}
+POST /api/chat 400
+POST /api/chat 200
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/stream 200
+  SSE {"type": "agent_start", "messageId": null}
+  SSE {"type": "message_update", "messageId": "msg_e72770031097446b85930024036c881f"}
+  SSE {"type": "message_end", "messageId": "msg_e72770031097446b85930024036c881f"}
+  SSE {"type": "message_update", "messageId": "msg_2440f39b160849ab9278ba0f6fffdafb"}
+  SSE {"type": "message_end", "messageId": "msg_2440f39b160849ab9278ba0f6fffdafb"}
+  SSE {"type": "message_update", "messageId": "msg_4ad2518a615d4be1ba1dfd48d11d3a8b"}
+  SSE {"type": "message_end", "messageId": "msg_4ad2518a615d4be1ba1dfd48d11d3a8b"}
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5 200
+  Same call ID in persisted answer "call_probe"
+  Plan and check {"tree": {"version": 1, "nodes": [{"id": "halves", "title": "Halves"}, {"id": "scale", "title": "Scaling both parts"}], "edges": [{"from": "halves", "to": "scale"}]}, "nodeId": "scale"}
+GET /api/chats 200
+
+3. Practice uses a separate session and a separate tool set
+POST /api/chats 200
+POST /api/chat 200
+GET /api/chats/chat_37abc6a008d74db680eaa8e98f5848cf/stream 200
+  SSE {"type": "agent_start", "messageId": null}
+  SSE {"type": "message_update", "messageId": "msg_c39fcfbadada4b4789fe563afce543fd"}
+  SSE {"type": "message_end", "messageId": "msg_c39fcfbadada4b4789fe563afce543fd"}
+GET /api/chats/chat_37abc6a008d74db680eaa8e98f5848cf 200
+  Saved practice problem "Write one half in fourths."
+POST /api/chat 200
+GET /api/chats/chat_37abc6a008d74db680eaa8e98f5848cf/stream 200
+  SSE {"type": "agent_start", "messageId": null}
+  SSE {"type": "message_update", "messageId": "msg_5e78b9c2a1d44c9aa60fb44814480c90"}
+  SSE {"type": "message_end", "messageId": "msg_5e78b9c2a1d44c9aa60fb44814480c90"}
+GET /api/chats/chat_37abc6a008d74db680eaa8e98f5848cf 200
+  Practice conclusion {"outcome": "solved", "verdict": "Both parts scale by two."}
+POST /api/chat 200
+GET /api/chats/chat_37abc6a008d74db680eaa8e98f5848cf/stream 200
+  SSE {"type": "agent_start", "messageId": null}
+  SSE {"type": "message_update", "messageId": "msg_ad95a61d935d4bcda33d64c554273194"}
+  SSE {"type": "message_end", "messageId": "msg_ad95a61d935d4bcda33d64c554273194"}
+GET /api/chats/chat_37abc6a008d74db680eaa8e98f5848cf 200
+
+4. Import notes, show provenance and inspect the projection
+POST /api/graph/import 200
+  Import result {"requestIndex": 0, "filePath": "course/fractions.md", "outcome": "completed", "ok": true, "stats": {"nodes": 2, "chains": 1}}
+GET /api/graph 200
+  Graph {"propositions": ["Equivalent fractions", "Halves and fourths"], "chains": [{"id": "arg_6e64d043d52647ee", "premises": ["n_51303c3cf09bedaf"], "conclusion": "n_e9fd6726f3092b03", "createdAt": "2026-11-19T13:43:49.350413013Z", "provenance": [{"chatId": "src_1e3331f4e622", "messageId": ""}]}]}
+
+5. Ask for a hint in a side conversation
+POST /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/side-chats 200
+  NDJSON "thread"
+  NDJSON "text"
+  NDJSON "text"
+  NDJSON "done"
+  Final side answer "Both parts doubled, so the fraction has the same value."
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/side-chats 200
+PATCH /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/side-chats/side_msg_e72770031097446b85930024036c881f 200
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/side-chats/side_msg_e72770031097446b85930024036c881f 200
+
+6. Read back the native record, Markdown and private ZIP
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5 200
+  Stored message count and usage turns {"messages": 9, "turns": 3}
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/markdown 200
+  Markdown ["# Fractions demo", "", "user: Why is one half equal to two quarters?", "Which fraction equals one half?", "2/4"]
+GET /internal/v1/profile/export 200
+  Profile archive members ["chats/chat_37abc6a008d74db680eaa8e98f5848cf.json", "chats/chat_e514396ec6854ee28ffaa0b5ead312a5.json", "graph/chains.jsonl", "graph/coverage.jsonl", "graph/format.json", "graph/nodes.jsonl", "graph/sessions.jsonl", "graph/source-organization.json", "graph/sources.json"]
+
+Extra. Exercise settings, safe refusals and graph/session edits
+PUT /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5 200
+PUT /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/settings 200
+GET /api/settings 200
+PUT /api/settings/models 200
+GET /api/settings/prompts 200
+PUT /api/settings/prompts/system-prompt.md 200
+DELETE /api/settings/prompts/system-prompt.md 200
+GET /api/keys 200
+PUT /api/keys/OPENAI_API_KEY 200
+  Masked key status "…-key (27 chars)"
+DELETE /api/keys/OPENAI_API_KEY 200
+GET /api/stt/token 503
+GET /api/themes 200
+POST /api/themes 201
+DELETE /api/themes/demo-theme 200
+GET /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/images/0000000000000000000000000000000000000000000000000000000000000000 404
+GET /api/jobs?chatId=chat_e514396ec6854ee28ffaa0b5ead312a5 200
+GET /api/activity 200
+GET /api/graph/status 200
+POST /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/side-chats/side_msg_e72770031097446b85930024036c881f/stop 409
+POST /api/chats/chat_e514396ec6854ee28ffaa0b5ead312a5/dismiss 200
+Timing checks require TCP streaming and are excluded from this in-process run.
+POST /api/graph/coverage/extract 202
+GET /api/graph/status 200
+GET /api/graph/status 200
+GET /api/graph/render-settings 200
+PUT /api/graph/render-settings 200
+PUT /api/graph/positions 200
+GET /api/graph/sources 200
+POST /api/graph/sources 200
+DELETE /api/graph/nodes/arg_6e64d043d52647ee 200
+DELETE /api/graph/sources 200
+DELETE /api/chats/chat_37abc6a008d74db680eaa8e98f5848cf?mode=preserve-graph 200

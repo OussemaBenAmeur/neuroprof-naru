@@ -1,0 +1,39 @@
+syntax = "proto3";
+package naruprof.learning.v1;
+
+option java_package = "org.naruprof.contract.learning.v1";
+option java_multiple_files = true;
+
+// A profile is assigned by the local installation. Authorize it at the facade.
+service LearningProjection {
+  rpc GetSnapshot(Profile) returns (ProjectionState);
+  rpc Watch(WatchRequest) returns (stream ProjectionState);
+}
+
+message Profile {
+  string profile_id = 1;
+}
+
+message WatchRequest {
+  string profile_id = 1;
+  uint64 after_sequence = 2; // Exclusive. Zero is the initial snapshot version.
+}
+
+// Full replacements. sequence is monotonic within a profile across restarts.
+message ProjectionState {
+  string profile_id = 1;
+  uint64 sequence = 2;
+  oneof state {
+    Summary summary = 3;
+    Deleted deleted = 4;
+  }
+}
+
+message Summary {
+  uint64 teaching_sessions = 1;
+  uint64 practice_sessions = 2;
+  uint64 propositions = 3;
+  uint64 reasoning_chains = 4;
+}
+
+message Deleted {}

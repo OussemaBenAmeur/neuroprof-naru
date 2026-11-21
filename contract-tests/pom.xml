@@ -1,0 +1,13 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.naruprof</groupId><artifactId>naruprof-naru</artifactId><version>1.0.0</version></parent>
+  <artifactId>contract-tests</artifactId>
+  <dependencies>
+    <dependency><groupId>org.naruprof</groupId><artifactId>service-impl</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.naruprof</groupId><artifactId>ws-rest</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.naruprof</groupId><artifactId>dal-naru</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit</artifactId><version>1.4.2</version><scope>test</scope></dependency>
+  </dependencies>
+</project>

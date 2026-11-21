@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NaruProf Demo</title>
+<style>
+:root{
+  --bg:#fafaf9;--card:#fff;--ink:#1c1c1e;--muted:#6e6e73;--line:#e7e5e4;--soft:#f3f2f0;
+  --accent:#3b5bdb;--accent-soft:#eef1fd;--ok:#2b8a3e;--ok-soft:#ebfbee;--err:#c92a2a;--err-soft:#fff0f0;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#121214;--card:#1b1b1e;--ink:#ececf0;--muted:#9a9aa3;--line:#2c2c31;--soft:#232327;
+  --accent:#7c93f0;--accent-soft:#232a45;--ok:#5fcf7a;--ok-soft:#1b2b20;--err:#ff7b7b;--err-soft:#2e1c1c;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+.wrap{max-width:760px;margin:0 auto;padding:0 16px 120px}
+header{display:flex;align-items:center;gap:12px;padding:22px 0 14px}
+header h1{font-size:18px;margin:0;font-weight:650;letter-spacing:-.2px}
+header .sub{color:var(--muted);font-size:13px}
+.grow{flex:1}
+.status{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.dot.on{background:var(--ok)}.dot.wait{background:#e8a33d}
+nav{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto}
+nav button{background:none;border:0;border-bottom:2px solid transparent;border-radius:0;padding:10px 12px;color:var(--muted);font-weight:500}
+nav button.on{color:var(--ink);border-bottom-color:var(--accent)}
+button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px;border-radius:10px;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.link{border:0;background:none;padding:0;color:var(--accent);font-size:13px}
+input,textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+input:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+.intro{color:var(--muted);margin:0 0 18px;font-size:14px}
+.empty{text-align:center;padding:48px 16px;color:var(--muted)}
+.empty h2{color:var(--ink);font-size:17px;margin:0 0 6px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px}
+/* conversation */
+.conv{display:flex;flex-direction:column;gap:12px}
+.bubble{max-width:85%;padding:10px 14px;border-radius:16px;white-space:pre-wrap}
+.me{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.ai{align-self:flex-start;background:var(--card);border:1px solid var(--line);border-bottom-left-radius:4px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;align-self:stretch}
+.card .kicker{font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:4px}
+.card .q{font-weight:600;margin-bottom:10px}
+.opts{display:flex;gap:8px;flex-wrap:wrap}
+.opt.right{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+.opt.wrong{background:var(--err-soft);border-color:var(--err);color:var(--err)}
+.note{font-size:13px;color:var(--muted);margin-top:8px}
+.ok{color:var(--ok)}.err{color:var(--err)}
+.plan{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.node{background:var(--accent-soft);color:var(--accent);padding:4px 10px;border-radius:99px;font-size:13px;font-weight:500}
+.typing{align-self:flex-start;color:var(--muted);font-size:13px}
+.hint{margin-top:8px;padding:10px 12px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 10px 10px 0;font-size:14px}
+.composer{position:fixed;left:0;right:0;bottom:0;background:linear-gradient(transparent,var(--bg) 30%);padding:20px 16px 16px}
+.composer .in{max-width:760px;margin:0 auto;display:flex;gap:8px}
+.bar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+.bar .label{font-size:13px;color:var(--muted)}
+/* graph */
+.props{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.prop{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.prop b{display:block;margin-bottom:2px}
+.chain{background:var(--card);border:1px dashed var(--accent);border-radius:12px;padding:12px 14px;margin-top:10px}
+.counts{display:flex;gap:10px;margin:14px 0}
+.count{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+.count b{font-size:22px;display:block}
+.count span{font-size:12px;color:var(--muted)}
+/* under the hood */
+.proof{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px}
+.proof h3{margin:0 0 2px;font-size:15px}
+.proof p{margin:0 0 10px;color:var(--muted);font-size:13.5px}
+.result{font:13px var(--mono);margin-top:10px;white-space:pre-wrap;color:var(--muted)}
+.result:empty{display:none}
+/* request log */
+#netBtn{position:fixed;right:16px;bottom:16px;z-index:9;font-size:12.5px;border-radius:99px;padding:6px 12px;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+#net{position:fixed;right:16px;bottom:56px;width:min(440px,calc(100vw - 32px));max-height:50vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:8px 0;z-index:9;display:none;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+#net div{display:flex;gap:8px;padding:3px 12px;font:12px var(--mono)}
+#net .p{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.s2{color:var(--ok)}.s4,.s5{color:var(--err)}
+body.has-composer #netBtn{bottom:84px}body.has-composer #net{bottom:124px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><h1>NaruProf</h1><div class="sub">Learning engine demo</div></div>
+    <span class="grow"></span>
+    <span class="status"><span class="dot" id="dot"></span><span id="statusTxt">Checking…</span></span>
+    <button class="primary" id="startBtn" onclick="startEngine()" style="display:none">Start</button>
+  </header>
+
+  <nav id="tabs">
+    <button data-t="lesson" class="on">1 · Lesson</button>
+    <button data-t="practice">2 · Practice</button>
+    <button data-t="graph">3 · Knowledge graph</button>
+    <button data-t="hood">4 · Under the hood</button>
+  </nav>
+
+  <!-- LESSON -->
+  <section data-t="lesson">
+    <p class="intro">A student asks a question. The tutor first checks what they already know, then makes a lesson plan and teaches with check questions.</p>
+    <div class="bar"><span class="label">Session</span><span id="lessonTitle" class="label"></span><span class="grow"></span><button onclick="newSession('lesson')">New lesson</button></div>
+    <div id="lessonConv" class="conv"></div>
+  </section>
+
+  <!-- PRACTICE -->
+  <section data-t="practice" hidden>
+    <p class="intro">Practice is a separate session. The tutor gives an exercise, the student explains their reasoning, and the tutor concludes.</p>
+    <div class="bar"><span class="label">Session</span><span id="practiceTitle" class="label"></span><span class="grow"></span><button onclick="newSession('practice')">New practice</button></div>
+    <div id="practiceConv" class="conv"></div>
+  </section>
+
+  <!-- GRAPH -->
+  <section data-t="graph" hidden>
+    <p class="intro">Import course notes. The engine extracts propositions (facts) and reasoning chains, and keeps track of which file they came from.</p>
+    <div class="bar">
+      <button class="primary" onclick="importSample()">Import sample notes</button>
+      <button onclick="document.getElementById('file').click()">Import my own file…</button>
+      <input type="file" id="file" multiple hidden onchange="importFiles(this.files)">
+      <span class="grow"></span><button class="link" onclick="loadGraph()">Refresh</button>
+    </div>
+    <div id="graphMsg" class="note"></div>
+    <div class="counts" id="counts"></div>
+    <div id="graphView"></div>
+  </section>
+
+  <!-- UNDER THE HOOD -->
+  <section data-t="hood" hidden>
+    <p class="intro">Short checks that show how the engine behaves behind the screens.</p>
+    <div class="proof"><h3>It's a private service</h3><p>Every request needs the service token. Without it the engine refuses.</p>
+      <button onclick="proofAuth()">Run check</button><div class="result" id="rAuth"></div></div>
+    <div class="proof"><h3>Out-of-date answers are rejected</h3><p>An answer must point at the exact question that was saved. A wrong reference is refused, so nothing is recorded twice or on the wrong question.</p>
+      <button onclick="proofStale()">Run check</button><div class="result" id="rStale"></div></div>
+    <div class="proof"><h3>Nothing is lost on restart</h3><p>Restart the engine and reopen the lesson: the same messages come back from the database.</p>
+      <button onclick="proofRestart()">Restart and reopen</button><div class="result" id="rRestart"></div></div>
+    <div class="proof"><h3>Everything can be exported</h3><p>The whole profile downloads as a ZIP in the original app's file format. A lesson also exports as Markdown.</p>
+      <button onclick="proofExport()">Export profile</button> <button onclick="proofMarkdown()">Lesson as Markdown</button><div class="result" id="rExport"></div></div>
+    <p class="note">Need every endpoint? Open the <a href="/advanced">advanced console</a>.</p>
+  </section>
+</div>
+
+<div class="composer" id="composer" hidden>
+  <form class="in" onsubmit="event.preventDefault();sendText()">
+    <input id="msg" placeholder="Ask a question…" autocomplete="off">
+    <button class="primary" id="sendBtn">Send</button>
+  </form>
+</div>
+
+<button id="netBtn" onclick="toggleNet()">Requests · <span id="netN">0</span></button>
+<div id="net"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const S = { tab: 'lesson', lesson: null, practice: null, busy: false, live: '', hints: {} };
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+
+/* ---------- requests ---------- */
+const NET = [];
+function logNet(m, p, s, ms) { NET.unshift({ m, p, s, ms }); $('netN').textContent = NET.length; if ($('net').style.display === 'block') renderNet(); }
+function renderNet() { $('net').innerHTML = NET.slice(0, 100).map(n => `<div><span class="s${String(n.s)[0]}">${n.s}</span><span>${n.m}</span><span class="p">${esc(n.p)}</span><span>${n.ms}ms</span></div>`).join('') || '<div class="p">No requests yet</div>'; }
+function toggleNet() { const n = $('net'); n.style.display = n.style.display === 'block' ? 'none' : 'block'; renderNet(); }
+
+async function call(method, path, { json, form, auth = 'vertx', onLine, signal } = {}) {
+  const headers = { 'X-Naru-Auth': auth }; let body;
+  if (json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(json); }
+  if (form) body = form;
+  const t0 = performance.now();
+  const res = await fetch('/naru' + path, { method, headers, body, signal });
+  const ct = res.headers.get('content-type') || '';
+  const out = { status: res.status, ct };
+  if (onLine && /event-stream|ndjson/.test(ct)) {
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+    try {
+      for (;;) { const { value, done } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true }); const lines = buf.split('\n'); buf = lines.pop();
+        for (const l of lines) if (l.trim()) onLine(l); }
+    } catch (e) { if (e.name !== 'AbortError') throw e; }
+  } else if (/zip/.test(ct)) out.buf = await res.arrayBuffer();
+  else { out.text = await res.text(); try { out.data = JSON.parse(out.text); } catch {} }
+  logNet(method, path, res.status, Math.round(performance.now() - t0));
+  return out;
+}
+
+/* ---------- engine status ---------- */
+let ready = false;
+async function checkReady() {
+  try { const r = await fetch('/naru/internal/health/ready', { headers: { 'X-Naru-Auth': 'vertx' } }); ready = r.ok; } catch { ready = false; }
+  $('dot').className = 'dot' + (ready ? ' on' : '');
+  $('statusTxt').textContent = ready ? `Engine ready${S.modelId ? ' · ' + S.modelId : ''}` : 'Engine stopped';
+  $('startBtn').style.display = ready ? 'none' : '';
+  return ready;
+}
+async function startEngine() {
+  $('startBtn').disabled = true; $('dot').className = 'dot wait'; $('statusTxt').textContent = 'Starting…';
+  const st = await (await fetch('/ctl/state')).json();
+  const usesFixture = st.config.modelMode === 'fixture';
+  $('statusTxt').textContent = usesFixture ? 'Starting scripted model…' : `Launching ${st.config.ollamaModel} (Ollama)…`;
+  const m = await (await fetch('/ctl/start/model', { method: 'POST' })).json();
+  if (m.error) { alert(m.error); $('startBtn').disabled = false; $('dot').className = 'dot'; $('statusTxt').textContent = 'Model failed to start'; return; }
+  $('statusTxt').textContent = 'Starting engine…';
+  if (!st.procs.engine.running) {
+    const r = await (await fetch('/ctl/start/engine', { method: 'POST' })).json();
+    if (r.error) { alert(r.error); $('startBtn').disabled = false; return; }
+  }
+  for (let i = 0; i < 90 && !(await checkReady()); i++) { $('dot').className = 'dot wait'; $('statusTxt').textContent = 'Starting…'; await sleep(1000); }
+  $('startBtn').disabled = false; boot();
+}
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => showTab(b.dataset.t));
+function showTab(t) {
+  S.tab = t; store.set('demo.tab', t);
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  document.querySelectorAll('section[data-t]').forEach(s => s.hidden = s.dataset.t !== t);
+  const chatTab = t === 'lesson' || t === 'practice';
+  $('composer').hidden = !chatTab; document.body.classList.toggle('has-composer', chatTab);
+  $('msg').placeholder = t === 'practice' ? 'Ask for an exercise…' : 'Ask a question…';
+  if (t === 'graph') loadGraph();
+  if (chatTab) render(t);
+}
+
+/* ---------- sessions ---------- */
+async function newSession(kind) {
+  const body = kind === 'practice' ? { title: 'Fraction practice', kind: 'practice' } : { title: 'Fractions lesson' };
+  const r = await call('POST', '/api/chats', { json: body });
+  if (!r.data?.id) return alert('Could not create a session. Is the engine running?');
+  S[kind] = { id: r.data.id, data: null }; store.set('demo.' + kind, r.data.id);
+  await reload(kind);
+}
+async function reload(kind) {
+  const s = S[kind]; if (!s) return render(kind);
+  const r = await call('GET', `/api/chats/${s.id}`);
+  if (r.status !== 200) { S[kind] = null; store.set('demo.' + kind, ''); return render(kind); }
+  s.data = r.data; render(kind);
+}
+const conv = kind => $(kind + 'Conv');
+
+/* ---------- rendering ---------- */
+function render(kind) {
+  const s = S[kind], el = conv(kind);
+  $(kind + 'Title').textContent = s?.data ? s.data.title : '';
+  if (!s?.data) {
+    const sug = kind === 'lesson' ? ['Why is one half equal to two quarters?'] : ['Give me a fraction exercise.'];
+    el.innerHTML = `<div class="empty"><h2>${kind === 'lesson' ? 'Start a lesson' : 'Start practising'}</h2>Type below, or try:<div class="chips">${sug.map(q => `<button onclick="sendText(${esc(JSON.stringify(q))})">${esc(q)}</button>`).join('')}</div></div>`;
+    return;
+  }
+  const msgs = s.data.messages || [];
+  const results = {}; msgs.filter(m => m.role === 'toolResult').forEach(m => results[m.toolCallId] = m);
+  let html = '';
+  msgs.forEach(m => {
+    if (m.role === 'user') { const t = typeof m.content === 'string' ? m.content : (m.content || []).filter(p => p.type === 'text').map(p => p.text).join('\n'); if (t) html += `<div class="bubble me">${esc(t)}</div>`; return; }
+    if (m.role === 'custom' && m.customType === 'practice-thinking') { html += `<div class="bubble me">${esc(m.details?.text || '')}</div>`; return; }
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) return;
+    m.content.forEach((p, i) => {
+      if (p.type === 'text' && p.text.trim()) html += `<div class="bubble ai">${esc(p.text)}${hintBlock(kind, m, p.text)}</div>`;
+      if (p.type === 'toolCall') html += toolCard(kind, m, p, i, results[p.id]);
+    });
+    if (m.stopReason === 'aborted') html += `<div class="note">— stopped —</div>`;
+    if (m.stopReason === 'error' && m === msgs[msgs.length - 1])
+      html += `<div class="card"><div class="err">The model call failed${m.errorMessage ? ': ' + esc(m.errorMessage) : ''}.</div><div style="margin-top:8px"><button ${S.busy ? 'disabled' : ''} onclick="retry('${kind}')">Try again</button></div></div>`;
+    if (m.stopReason === 'stop' && !m.content.some(p => (p.type === 'text' && p.text.trim()) || p.type === 'toolCall'))
+      html += `<div class="note">(the model returned an empty reply — check the model's context window)</div>`;
+  });
+  if (S.busy && S.busyKind === kind) html += S.live ? `<div class="bubble ai">${esc(S.live)}</div>` : `<div class="typing">Tutor is thinking…</div>`;
+  el.innerHTML = html;
+  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+}
+function occ(m, p, i) { return { messageId: m.id, contentIndex: i, toolCallId: p.id, toolName: p.name }; }
+function toolCard(kind, m, p, i, result) {
+  const a = p.arguments || {}; const key = `${m.id}|${i}`; S.occ = S.occ || {}; S.occ[key] = occ(m, p, i);
+  const open = !result && m.stopReason !== 'aborted';
+  const skip = k => open ? `<div class="note"><button class="link" onclick="dismiss('${kind}','${p.id}','${k}')">Skip this question</button></div>` : '';
+  if ((p.name === 'probe' || p.name === 'quiz') && Array.isArray(a.options) && a.options.length) {
+    const correct = result?.details?.correct; const chosen = result?.details?.answers?.[0]?.index;
+    const norm = a.options.map(o => typeof o === 'object' ? o : { value: String(o), label: String(o) })
+      .map(o => ({ ...o, show: String(o.label).length <= 4 && String(o.value).length > String(o.label).length ? `${o.label}. ${o.value}` : o.label }));
+    const isRight = o => String(a.correctAnswer ?? '').trim().toLowerCase() === String(o.value).trim().toLowerCase() || String(a.correctAnswer ?? '').trim().toLowerCase() === String(o.label).trim().toLowerCase();
+    const opts = norm.map((o, k) => {
+      let cls = ''; if (result && isRight(o)) cls = 'right'; else if (result && chosen === k) cls = 'wrong';
+      return `<button class="opt ${cls}" ${open && !S.busy ? '' : 'disabled'} onclick="answer('${kind}','${key}',${isRight(o)},${k},${esc(JSON.stringify(o.label))})">${esc(o.show)}</button>`;
+    }).join('');
+    const kick = p.name === 'probe' ? 'Checking what you know' : `Check question${a.nodeId ? ' · topic “' + esc(a.nodeId) + '”' : ''}`;
+    let note = '';
+    if (result) note = result.details?.dismissed ? '<div class="note">Skipped</div>' : `<div class="note ${correct ? 'ok' : 'err'}">${correct ? '✓ Correct' : '✗ Not quite'}${a.explanation ? ' — ' + esc(a.explanation) : ''}</div>`;
+    else note = skip('quiz');
+    return `<div class="card"><div class="kicker">${kick}</div><div class="q">${esc(a.question)}</div><div class="opts">${opts}</div>${note}</div>`;
+  }
+  if (['ask_user_question', 'recall', 'explain', 'probe', 'quiz'].includes(p.name)) {
+    // Free-text questions. ask_user_question → kind "ask"; recall/explain → kind "explain".
+    const k = p.name === 'ask_user_question' ? 'ask' : p.name === 'probe' || p.name === 'quiz' ? 'quiz' : 'explain';
+    const kick = { ask_user_question: 'The tutor asks', recall: 'Recall', explain: 'Explain in your own words' }[p.name] || 'Question';
+    let body;
+    if (result) body = result.details?.dismissed ? '<div class="note">Skipped</div>' : `<div class="bubble me" style="margin-left:auto;margin-top:6px">${esc(result.details?.text || '')}</div>`;
+    else body = `<textarea id="a_${esc(p.id)}" rows="2" placeholder="Your answer…"></textarea><div style="margin-top:8px;display:flex;gap:8px;align-items:center"><button class="primary" ${S.busy ? 'disabled' : ''} onclick="answerText('${kind}','${key}','${k}','${esc(p.id)}')">Answer</button>${skip(k).replace('<div class="note">', '<span class="note">').replace('</div>', '</span>')}</div>`;
+    return `<div class="card"><div class="kicker">${kick}</div><div class="q">${esc(a.question)}</div>${body}</div>`;
+  }
+  if (p.name === 'list_sessions' || p.name === 'list_propositions') {
+    return `<div class="note">🔎 The tutor looked up ${p.name === 'list_sessions' ? 'your past sessions' : 'what you already know'}</div>`;
+  }
+  if (p.name === 'probe_done') {
+    const st = a.assessment?.strands || [];
+    return `<div class="card"><div class="kicker">What the tutor learned about you</div>${st.map(x => `<div><b>${esc(x.strand)}:</b> ${esc(x.assessment)}</div>`).join('')}</div>`;
+  }
+  if (p.name === 'plan_init') {
+    const nodes = []; String(a.mermaid || '').replace(/\w+\[([^\]]+)\]/g, (_, l) => nodes.push(l));
+    return `<div class="card"><div class="kicker">Lesson plan</div><div class="plan">${nodes.map(n => `<span class="node">${esc(n)}</span>`).join('<span>→</span>')}</div></div>`;
+  }
+  if (p.name === 'problem') {
+    const form = open ? `<textarea id="r_${esc(p.id)}" rows="2" placeholder="Explain your reasoning…">Multiply the numerator and denominator by two.</textarea><div style="margin-top:8px"><button class="primary" ${S.busy ? 'disabled' : ''} onclick="reason('${kind}','${key}','${esc(p.id)}')">Submit reasoning</button></div>`
+      : '<div class="note">Answered</div>';
+    return `<div class="card"><div class="kicker">Exercise</div><div class="q">${esc(a.statement)}</div>${form}</div>`;
+  }
+  if (p.name === 'conclude') {
+    const last = isLastCall(kind, p.id);
+    return `<div class="card"><div class="kicker">Result</div><div class="ok"><b>✓ ${esc(a.outcome)}</b> — ${esc(a.verdict)}</div>${last ? `<div style="margin-top:10px"><button ${S.busy ? 'disabled' : ''} onclick="nextProblem()">Next exercise</button></div>` : ''}</div>`;
+  }
+  return `<div class="card"><div class="kicker">${esc(p.name)}</div><div class="note">${esc(JSON.stringify(a)).slice(0, 200)}</div></div>`;
+}
+function isLastCall(kind, id) {
+  const ms = S[kind].data.messages; for (let k = ms.length - 1; k >= 0; k--) { const c = ms[k].role === 'assistant' && Array.isArray(ms[k].content) && ms[k].content.filter(p => p.type === 'toolCall'); if (c && c.length) return c[c.length - 1].id === id; } return false;
+}
+function hintBlock(kind, m, text) {
+  if (kind !== 'lesson' || !m.id) return '';
+  const h = S.hints[m.id];
+  if (h) return `<div class="hint">${h.text ? esc(h.text) : '…'}</div>`;
+  return `<div style="margin-top:6px"><button class="link" onclick="askHint('${m.id}',${esc(JSON.stringify(text.slice(0, 200)))})">Ask a side question about this</button></div>`;
+}
+
+/* ---------- actions ---------- */
+async function sendText(text) {
+  const kind = S.tab; if (kind !== 'lesson' && kind !== 'practice') return;
+  text = (text ?? $('msg').value).trim(); if (!text || S.busy) return;
+  if (!S[kind]) await newSession(kind);
+  $('msg').value = '';
+  S[kind].data.messages.push({ role: 'user', content: text });
+  await turn(kind, { type: 'text', text });
+}
+async function answer(kind, key, correct, index, label) {
+  const o = S.occ[key];
+  await turn(kind, { type: 'answer', toolCallId: o.toolCallId, answer: { kind: 'quiz', correct, answers: [{ index, label }] }, occurrence: o });
+}
+async function answerText(kind, key, k, id) {
+  const o = S.occ[key]; const text = $('a_' + id).value.trim(); if (!text) return;
+  await turn(kind, { type: 'answer', toolCallId: o.toolCallId, answer: { kind: k, text }, occurrence: o });
+}
+async function retry(kind) { await turn(kind, { type: 'retry' }); }
+async function reason(kind, key, id) {
+  const o = S.occ[key]; const text = $('r_' + id).value.trim() || '…';
+  await turn(kind, { type: 'thinking', problemCallId: id, occurrence: o, text });
+}
+async function nextProblem() { await turn('practice', { type: 'next' }); }
+async function dismiss(kind, toolCallId, k = 'quiz') {
+  await call('POST', `/api/chats/${S[kind].id}/dismiss`, { json: { input: { type: 'dismiss', toolCallId, answer: { kind: k, dismissed: true } } } });
+  await reload(kind);
+}
+async function turn(kind, input) {
+  if (S.busy) return;
+  S.busy = true; S.busyKind = kind; S.live = ''; render(kind); $('sendBtn').disabled = true;
+  try {
+    const r = await call('POST', '/api/chat', { json: { chatId: S[kind].id, input } });
+    if (r.status !== 200) { alert(`The engine refused this (${r.status}): ${r.data?.error || r.text || ''}`); return; }
+    await call('GET', `/api/chats/${S[kind].id}/stream`, { onLine: line => {
+      if (!line.startsWith('data: ')) return; const d = line.slice(6); if (d === '[DONE]') return;
+      try { const f = JSON.parse(d); const c = f.message?.content;
+        if (f.type === 'message_update' && Array.isArray(c)) { S.live = c.filter(p => p.type === 'text').map(p => p.text).join(''); render(kind); } } catch {}
+    } });
+  } finally { S.busy = false; S.live = ''; $('sendBtn').disabled = false; await reload(kind); }
+}
+async function askHint(messageId, blockText) {
+  const s = S.lesson; S.hints[messageId] = { text: '' }; render('lesson');
+  await call('POST', `/api/chats/${s.id}/side-chats`, { json: {
+    requestId: 'hint_' + Math.random().toString(36).slice(2), text: 'Can you explain the idea without giving away the answer?',
+    anchor: { messageId, partId: messageId + '-t0', blockIndex: 0, blockText } },
+    onLine: l => { try { const ev = JSON.parse(l);
+      if (ev.type === 'text') S.hints[messageId].text = ev.text;
+      if (ev.type === 'done') S.hints[messageId].text = ev.thread?.messages?.at(-1)?.text || S.hints[messageId].text;
+      render('lesson'); } catch {} } });
+}
+
+/* ---------- graph ---------- */
+async function importSample() {
+  const fd = new FormData();
+  fd.append('files', new File(['# Equivalent fractions\nOne half is two quarters.\n'], 'fractions.md', { type: 'text/markdown' }));
+  fd.append('paths', 'course/fractions.md');
+  await doImport(fd);
+}
+async function importFiles(files) {
+  if (!files.length) return; const fd = new FormData(); [...files].forEach(f => fd.append('files', f, f.name)); await doImport(fd); $('file').value = '';
+}
+async function doImport(fd) {
+  $('graphMsg').textContent = 'Reading the notes and extracting ideas…';
+  const r = await call('POST', '/api/graph/import', { form: fd });
+  const res = r.data?.results || [];
+  $('graphMsg').innerHTML = res.length ? res.map(x => `<div class="${x.ok ? 'ok' : 'err'}">${x.ok ? '✓' : '✗'} ${esc(x.filePath || x.path || 'file')}${x.stats ? ` — ${x.stats.nodes} propositions, ${x.stats.chains} chain(s)` : ''}${x.error ? ' — ' + esc(x.error) : ''}</div>`).join('') : esc(r.data?.error || `Import returned ${r.status}`);
+  await loadGraph();
+}
+async function loadGraph() {
+  const [g, src, chats] = await Promise.all([call('GET', '/api/graph'), call('GET', '/api/graph/sources'), call('GET', '/api/chats')]);
+  const props = g.data?.propositions || [], chains = g.data?.chains || [], sources = src.data?.sources || [], rows = chats.data?.chats || [];
+  const name = Object.fromEntries(props.map(p => [p.id, p.name]));
+  $('counts').innerHTML = [['Lessons', rows.filter(r => r.kind !== 'practice').length], ['Practice', rows.filter(r => r.kind === 'practice').length], ['Propositions', props.length], ['Chains', chains.length]]
+    .map(([l, n]) => `<div class="count"><b>${n}</b><span>${l}</span></div>`).join('');
+  $('graphView').innerHTML = !props.length ? '<div class="empty">No knowledge yet. Import the sample notes to see what gets extracted.</div>' :
+    `<div class="props">${props.map(p => `<div class="prop"><b>${esc(p.name)}</b><span class="note">${esc(p.statement || '')}</span></div>`).join('')}</div>` +
+    chains.map(c => `<div class="chain"><div class="kicker note">Reasoning chain</div>${(c.premises || []).map(id => esc(name[id] || id)).join(' + ')} <b>⇒</b> ${esc(name[c.conclusion] || c.conclusion || c.name || '')}</div>`).join('') +
+    (() => { const files = sources.filter(s => s.kind !== 'chat').map(s => s.name || s.label || s.filePath).filter(Boolean); return files.length ? `<p class="note">Source files: ${files.map(esc).join(', ')}</p>` : ''; })();
+}
+
+/* ---------- under the hood ---------- */
+async function proofAuth() {
+  const a = await call('GET', '/internal/health/live', { auth: 'none' });
+  const b = await call('GET', '/internal/health/live');
+  $('rAuth').innerHTML = `Without token → <span class="${a.status === 401 ? 'ok' : 'err'}">${a.status}${a.status === 401 ? ' refused' : ''}</span>\nWith token    → <span class="${b.status === 200 ? 'ok' : 'err'}">${b.status} ${esc(b.data?.status || '')}</span>`;
+}
+async function proofStale() {
+  const s = S.lesson; if (!s?.data) return $('rStale').textContent = 'Start a lesson first (tab 1), then come back.';
+  let found = null;
+  s.data.messages.forEach(m => Array.isArray(m.content) && m.content.forEach((p, i) => { if (p.type === 'toolCall' && (p.name === 'probe' || p.name === 'quiz')) found = occ(m, p, i); }));
+  if (!found) return $('rStale').textContent = 'Ask a question in the lesson first so the tutor saves a question.';
+  const r = await call('POST', '/api/chat', { json: { chatId: s.id, input: { type: 'answer', toolCallId: found.toolCallId, answer: { kind: 'quiz', correct: true }, occurrence: { ...found, messageId: 'stale' } } } });
+  $('rStale').innerHTML = `Answer pointing at a wrong message → <span class="${r.status === 400 ? 'ok' : 'err'}">${r.status}</span> ${esc(r.data?.error || '')}`;
+}
+async function proofRestart() {
+  const s = S.lesson; if (!s?.data) return $('rRestart').textContent = 'Start a lesson first (tab 1).';
+  const before = s.data.messages.length;
+  $('rRestart').textContent = `Lesson has ${before} messages. Stopping the engine…`;
+  await fetch('/ctl/stop/engine', { method: 'POST' }); await checkReady();
+  $('rRestart').textContent += '\nStarting it again…';
+  await fetch('/ctl/start/engine', { method: 'POST' });
+  for (let i = 0; i < 90 && !(await checkReady()); i++) await sleep(1000);
+  await reload('lesson');
+  const after = S.lesson?.data?.messages.length ?? 0;
+  $('rRestart').innerHTML = esc($('rRestart').textContent) + `\nReopened: <span class="${after === before ? 'ok' : 'err'}">${after} messages${after === before ? ' ✓ same as before' : ''}</span>`;
+}
+async function proofExport() {
+  const r = await call('GET', '/internal/v1/profile/export');
+  if (!r.buf) return $('rExport').textContent = `Export failed (${r.status})`;
+  const names = zipNames(r.buf), url = URL.createObjectURL(new Blob([r.buf], { type: 'application/zip' }));
+  $('rExport').innerHTML = `<a href="${url}" download="naruprof-profile.zip">Download ZIP</a> · ${names.length} files\n` + names.slice(0, 12).map(esc).join('\n') + (names.length > 12 ? '\n…' : '');
+}
+async function proofMarkdown() {
+  const s = S.lesson; if (!s) return $('rExport').textContent = 'Start a lesson first (tab 1).';
+  const r = await call('GET', `/api/chats/${s.id}/markdown`);
+  const url = URL.createObjectURL(new Blob([r.text], { type: 'text/markdown' }));
+  $('rExport').innerHTML = `<a href="${url}" download="lesson.md">Download lesson.md</a>\n` + esc((r.text || '').split('\n').slice(0, 10).join('\n'));
+}
+function zipNames(buf) {
+  const v = new DataView(buf); let e = -1;
+  for (let i = buf.byteLength - 22; i >= 0; i--) if (v.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) return []; const n = v.getUint16(e + 10, true); let p = v.getUint32(e + 16, true); const out = [], d = new TextDecoder();
+  for (let k = 0; k < n; k++) { const nl = v.getUint16(p + 28, true), xl = v.getUint16(p + 30, true), cl = v.getUint16(p + 32, true); out.push(d.decode(new Uint8Array(buf, p + 46, nl))); p += 46 + nl + xl + cl; }
+  return out;
+}
+let evCtrl = null;
+async function toggleEvents() {
+  if (evCtrl) { evCtrl.abort(); evCtrl = null; $('evBtn').textContent = 'Start listening'; return; }
+  evCtrl = new AbortController(); $('evBtn').textContent = 'Stop listening'; $('rEvents').textContent = 'Listening… (switch tabs and do something)\n';
+  try {
+    await call('GET', '/api/events', { signal: evCtrl.signal, onLine: l => {
+      if (l.startsWith('event:')) $('rEvents').textContent += new Date().toLocaleTimeString() + '  ' + l.slice(6).trim() + '\n';
+    } });
+  } catch {}
+  evCtrl = null; $('evBtn').textContent = 'Start listening';
+}
+
+/* ---------- boot ---------- */
+async function boot() {
+  try { const st = await (await fetch('/ctl/state')).json(); S.modelId = st.config.modelMode === 'fixture' ? 'scripted fixture' : st.config.modelId + (st.ollama?.loaded ? ' (loaded)' : st.ollama?.up ? ' (not loaded)' : ' (Ollama down)'); } catch {}
+  if (!(await checkReady())) { showTab(S.tab); return; }
+  for (const kind of ['lesson', 'practice']) {
+    const id = store.get('demo.' + kind);
+    if (id && !S[kind]) { S[kind] = { id, data: null }; await reload(kind); }
+  }
+  showTab(S.tab);
+}
+S.tab = store.get('demo.tab') || 'lesson';
+boot(); setInterval(checkReady, 5000);
+</script>
+</body>
+</html>

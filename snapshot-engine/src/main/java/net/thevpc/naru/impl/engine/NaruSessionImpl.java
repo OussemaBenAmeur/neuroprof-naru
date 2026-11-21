@@ -1,0 +1,2196 @@
+package net.thevpc.naru.impl.engine;
+
+import net.thevpc.naru.api.agent.*;
+import net.thevpc.naru.api.mode.NaruPromptMode;
+import net.thevpc.naru.api.model.*;
+import net.thevpc.naru.api.registry.NaruDirective;
+import net.thevpc.naru.api.registry.NaruTool;
+import net.thevpc.naru.api.registry.NaruToolTag;
+import net.thevpc.naru.api.routine.NaruRoutine;
+import net.thevpc.naru.api.scheduler.*;
+import net.thevpc.naru.api.store.*;
+import net.thevpc.naru.api.stmt.NaruStatement;
+import net.thevpc.naru.api.task.NaruTask;
+import net.thevpc.naru.api.spawn.NaruSpawnPolicy;
+import net.thevpc.naru.api.spawn.NaruSpawnResolution;
+import net.thevpc.naru.api.spawn.NaruSpawnSeed;
+import net.thevpc.naru.api.spawn.NaruSpawnSource;
+import net.thevpc.naru.api.spawn.NaruSpawnStrategy;
+
+
+import net.thevpc.naru.api.task.NaruTaskSpec;
+import net.thevpc.naru.api.registry.NaruRegistry;
+import net.thevpc.naru.api.registry.NaruSessionExtension;
+import net.thevpc.naru.impl.engine.spawn.NaruSpawnContextImpl;
+import net.thevpc.naru.impl.engine.spawn.NaruSpawnPlanner;
+import net.thevpc.naru.impl.registry.NaruRegistryImpl;
+import net.thevpc.naru.impl.engine.routine.NaruRoutineMem;
+import net.thevpc.naru.impl.engine.routine.RoutineHelper;
+import net.thevpc.naru.impl.engine.scheduler.NaruSchedulerImpl;
+import net.thevpc.naru.impl.engine.scheduler.NaruSessionEventLogImpl;
+import net.thevpc.naru.impl.engine.scheduler.NaruTaskImpl;
+import net.thevpc.naru.impl.store.NaruFileSessionStore;
+import net.thevpc.naru.impl.store.NaruStoreFactory;
+import net.thevpc.naru.impl.util.ImplNaruUtils;
+import net.thevpc.nuts.concurrent.NCallable;
+import net.thevpc.nuts.elem.*;
+import net.thevpc.nuts.io.*;
+import net.thevpc.nuts.text.NMsg;
+import net.thevpc.nuts.time.NDuration;
+import net.thevpc.nuts.util.*;
+import net.thevpc.nuts.collections.NMaps;
+
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import net.thevpc.naru.impl.interaction.NaruTerminalInteraction;
+
+public class NaruSessionImpl implements NaruSession, NToElement {
+    private final NaruAgent agent;
+    /**
+     * public|private
+     */
+    private NaruVisibility visibility = NaruVisibility.PRIVATE;
+    private NaruModelConfig model;
+    private final Set<NPath> alreadyLoadedFiles = new HashSet<>();
+
+    private final NaruSessionStoreManagerImpl sessionStoreManager;
+    /**
+     * Where this session's state is written and read from.
+     *
+     * <p>Resolved once, at construction, from the store SPI. Nothing else in the engine
+     * knows which store this is -- the layout, the file names and the scope roots all live
+     * behind this one object, which is what makes swapping the backend a configuration
+     * change rather than a code change.
+     */
+    private final NaruSessionStore store;
+
+    private String uuid = UUID.randomUUID().toString();
+    private String name = "NO_NAME";
+    private Instant creationInstant = Instant.now();
+    private Instant modificationInstant = creationInstant;
+    // Add to NaruSessionImpl fields:
+    //use NOptional because ConcurrentHashMap cannot support null
+    private final Map<String, NOptional<Object>> env = new ConcurrentHashMap<>();
+    private final AtomicLong maxTaskId = new AtomicLong(0);
+    private long foregroundTaskId;
+    private final Map<Long, NaruTask> tasks = new ConcurrentHashMap<>();
+    private NPath workingDir;
+    /**
+     * Root directory of the project being worked on.
+     */
+    private NPath projectDir;
+    private final NaruScheduler scheduler;
+    // session has one dedicated readline thread, parked until needed
+    private boolean running = false;
+    private final NaruRegistry registry;
+    private String systemPrompt;
+    private final NaruSessionEventLog eventLog;
+    private final NaruSessionListener sessionListener;
+    /**
+     * The task the {@link net.thevpc.naru.api.agent.NaruSessionBuilder} created at build time,
+     * which {@link #run()} starts. The builder creates its task eagerly so that mode and
+     * foreground can be set on it, before the session ever runs.
+     */
+    private NaruTask configuredTask;
+    private boolean ranTask;
+    /** Guards against the reentrant stop() that killing the last live task provokes. */
+    private volatile boolean stopping;
+    private final List<NaruSessionListener> sessionListeners = new CopyOnWriteArrayList<>();
+    /**
+     * How this session reaches its user. Owns any input thread and all presentation, so
+     * a headless session runs with none of it.
+     */
+    private final NaruInteraction interaction;
+    /**
+     * Observers of provider-reported usage. Not persisted, and not part of session state:
+     * an extension that wants usage across a reload re-registers in open().
+     */
+    private final List<NaruSessionUsageListener> usageListeners = new CopyOnWriteArrayList<>();
+    private boolean stopped;
+    private final Map<String, NaruRoutine> routines = new ConcurrentHashMap<>();
+    private NaruSessionScope loadTimeScope;
+    private int schedulerThreadCount = 1;
+    private volatile long schedulerThrottleDelayMs = 500;
+    /**
+     * Rows displayed by the last '/model' listing, in display order. Kept so that
+     * '/model use <n>' resolves against the very same rows the user saw, even when
+     * the listing was filtered (--free, --provider, keyword) and therefore renumbered.
+     */
+    private volatile List<NaruModelKey> listedModels = Collections.emptyList();
+    /**
+     * Instance ids materialized from the registration store into the registry.
+     * Kept so a reload can remove exactly what it previously added — never a
+     * built-in provider that happens to share the id.
+     */
+    private final Set<String> registrationInstanceIds = new HashSet<>();
+    /**
+     * Named spawn policies defined by {@code /spawn-policy}, typically from an init
+     * script. Deliberately in-memory and never persisted: a policy is re-declared on every
+     * session start, which keeps a named policy in lock-step with the script that defines
+     * it.
+     */
+    private final Map<String, NaruSpawnPolicy> spawnPolicies = new LinkedHashMap<>();
+    /**
+     * Cached deprecated init-on-cd flag; null until first read. See
+     * {@link #isInitOnCdEnabled()}.
+     */
+    private Boolean initOnCdEnabled;
+    private boolean initOnCdWarned;
+
+
+    public NaruSessionImpl(NaruAgent agent, NPath projectDir, NaruInteraction interaction, boolean configureDefaults
+            , NaruSessionListener sessionListener
+            , Predicate<NaruDirective> directiveFilter
+            , Predicate<NaruTool> toolFilter
+            , Predicate<NaruToolTag> tagFilter
+    ) {
+        this.agent = agent;
+        // a session created without a stated preference gets the desktop one, which is
+        // what every caller did before this seam existed
+        this.interaction = interaction == null ? new NaruTerminalInteraction() : interaction;
+        this.projectDir = projectDir.normalize();
+        this.workingDir = projectDir.normalize();
+        this.sessionStoreManager = new NaruSessionStoreManagerImpl(this);
+        this.store = NaruStoreFactory.open(storeConfig(), storeName());
+        this.registry = new NaruRegistryImpl(this,directiveFilter, toolFilter, tagFilter);
+        this.sessionListener = sessionListener;
+        this.scheduler = new NaruSchedulerImpl(this);
+        this.eventLog = new NaruSessionEventLogImpl(new NaruEventLogListener() {
+            @Override
+            public void onEventAppended(NaruEvent newEvent) {
+                NaruTask t = findTask(newEvent.sourceTid()).orNull();
+                if (t != null) {
+                    t.log(NaruLogMode.SCHEDULER, NMsg.ofC("[%s] fire %s", newEvent.sourceTid(), newEvent));
+                } else {
+                    log(NaruLogMode.SCHEDULER, NMsg.ofC("[%s/dead] fire %s", newEvent.sourceTid(), newEvent));
+                }
+                if (sessionListener != null) {
+                    sessionListener.onEventAppended(newEvent);
+                }
+                for (NaruSessionListener listener : sessionListeners) {
+                    listener.onEventAppended(newEvent);
+                }
+            }
+        });
+        if (configureDefaults) {
+            ((NaruRegistryImpl) registry).registerDefaults();
+        }
+        // registrations become provider instances: each id in the store is registered
+        // under its own name, so its models list as <id>/<model> and resolve with the
+        // registration's own configuration (design doc §6)
+        reloadRegistrations();
+        // A brand new session has no state to restore, but extensions still have to be
+        // brought up: one may need the session to resolve anything at all. The SPI
+        // promises open() runs before any task does, and a fresh session runs tasks too.
+        openSessionExtensions();
+    }
+
+    @Override
+    public NaruSession throttleDelay(long ms) {
+        this.schedulerThrottleDelayMs = ms;
+        return this;
+    }
+
+    public int getSchedulerThreadCount() {
+        return schedulerThreadCount;
+    }
+
+    public NaruSessionImpl setSchedulerThreadCount(int schedulerThreadCount) {
+        this.schedulerThreadCount = schedulerThreadCount;
+        return this;
+    }
+
+    public long getSchedulerThrottleDelayMs() {
+        return schedulerThrottleDelayMs;
+    }
+
+    public NaruSessionImpl setSchedulerThrottleDelayMs(long schedulerThrottleDelayMs) {
+        this.schedulerThrottleDelayMs = schedulerThrottleDelayMs;
+        return this;
+    }
+
+    private void ensureNotStopped() {
+        if (stopped) {
+            throw new IllegalStateException("session is stopped");
+        }
+    }
+
+    public NaruScheduler scheduler() {
+        ensureNotStopped();
+        return scheduler;
+    }
+
+    @Override
+    public NaruVisibility getVisibility() {
+        return visibility;
+    }
+
+    @Override
+    public NaruSession setVisibility(NaruVisibility visibility) {
+        ensureNotStopped();
+        NAssert.requireNamedNonNull(visibility, "visibility");
+        if (visibility != NaruVisibility.PUBLIC && visibility != NaruVisibility.PRIVATE) {
+            NAssert.requireNamedTrue(false, "valid visibility");
+        }
+        this.visibility = visibility;
+        return this;
+    }
+
+    // Accessors
+    public NaruSession unsetSessionEnv(String key) {
+        ensureNotStopped();
+        if (env.containsKey(key)) {
+            env.remove(key);
+            fireChanged();
+        }
+        return this;
+    }
+
+    @Override
+    public List<NaruTask> tasks() {
+        ensureNotStopped();
+        return new ArrayList<>(tasks.values());
+    }
+    private NOptional<NaruModelConfig> resolveModel() {
+        if (this.model != null) {
+            return NOptional.of(this.model);
+        }
+
+        NaruModelConfig requestedModel = getProjectEnv("model")
+                .map(NaruModelConfig::new)
+                .orNull();
+        NaruModelConfig model = null;
+        if (requestedModel != null) {
+            if (!NBlankable.isBlank(requestedModel.name())) {
+                model = findModel(requestedModel.name()).orNull();
+            }
+            if (model == null && !NBlankable.isBlank(requestedModel.model())) {
+                String requestedKey = NBlankable.isBlank(requestedModel.provider())
+                        ? requestedModel.model()
+                        : requestedModel.key().toString();
+                model = findModel(requestedKey).orNull();
+            }
+        }
+
+        if (model == null) {
+            List<NaruModelInfo> toolModels = registry.modelsInfos(this)
+                    .stream()
+                    .filter(x -> x.capabilities().isTools())
+                    .collect(Collectors.toList());
+
+            if (toolModels.isEmpty()) {
+                if (requestedModel == null) {
+                    warn(NMsg.ofC("⚠ no model with tools capability is available"));
+                } else {
+                    warn(NMsg.ofC("⚠ requested model %s was not found; no model with tools capability is available",
+                            requestedModel));
+                }
+            } else {
+                for (NaruModelInfo fallbackInfo : toolModels) {
+                    model = findModel(fallbackInfo.key().toString()).orNull();
+                    if (model != null) {
+                        break;
+                    }
+                }
+
+                if (model == null) {
+                    if (requestedModel == null) {
+                        warn(NMsg.ofC("⚠ no available model with tools capability could be resolved"));
+                    } else {
+                        warn(NMsg.ofC("⚠ requested model %s was not found; no available model with tools capability could be resolved",
+                                requestedModel));
+                    }
+                } else if (requestedModel == null) {
+                    warn(NMsg.ofC("⚠ no model was requested; auto-selected %s", model.toText()));
+                } else {
+                    warn(NMsg.ofC("⚠ requested model %s was not found; selected %s instead",
+                            requestedModel, model.toText()));
+                }
+            }
+        }
+
+        return NOptional.ofNamed(model, "model");
+    }
+
+    @Override
+    public NaruTask newTask(NaruTaskSpec taskBuilder) {
+        ensureNotStopped();
+        long parentId = taskBuilder.parentId();
+        NPath cwd = taskBuilder.workingDirectory();
+        NaruTask parent = tasks.get(parentId);
+        NaruSpawnPolicy policy = resolveSpawnPolicy(taskBuilder);
+        NaruSpawnStrategy strategy = taskBuilder.strategy() == null ? NaruSpawnStrategy.NONE : taskBuilder.strategy();
+        NaruSpawnContextImpl spawnContext = new NaruSpawnContextImpl(
+                this, parent, taskBuilder,
+                taskBuilder.spawnKind() == null ? "task" : taskBuilder.spawnKind(),
+                strategy, taskBuilder.windowTurns(), policy, taskBuilder.contract());
+        notifySpawn(spawnContext);
+        NaruSpawnPlanner.Plan plan = NaruSpawnPlanner.plan(this, taskBuilder, spawnContext);
+
+        long id = maxTaskId.incrementAndGet();
+        NaruTaskImpl natuTask = new NaruTaskImpl(id, parent == null ? -1 : parent.id(), this);
+        natuTask.name(taskBuilder.name());
+        if (parent == null) {
+            natuTask._setInputMode(NaruInputMode.LINE);
+            natuTask._setWorkingDir(plan.workingDir != null ? plan.workingDir : (cwd == null ? workingDir : cwd));
+            natuTask._setProjectDir(projectDir);
+            natuTask._setMode(NUtils.firstNonNull(plan.promptMode, taskBuilder.promptMode(), registry().mode(NaruPromptMode.DEFAULT).get()));
+            natuTask._setInputBuffer("");
+            natuTask._setLastResult(null);
+            natuTask._setReturnResult(null);
+            natuTask._setModel(plan.model != null ? findModel(plan.model).get() : resolveModel().get());
+        } else {
+            natuTask._setInputMode(NaruInputMode.LINE);
+            natuTask._setWorkingDir(plan.workingDir != null ? plan.workingDir : (cwd == null ? parent.workingDir() : cwd));
+            natuTask._setProjectDir(parent.projectDir());
+            // an explicit mode on the spec wins over the inherited one, so that a
+            // plan can spawn implement-type executors from a PLANNING parent
+            natuTask._setMode(NUtils.firstNonNull(plan.promptMode, taskBuilder.promptMode(), parent.promptMode(), registry().mode(NaruPromptMode.DEFAULT).get()));
+            natuTask._setInputBuffer("");
+            natuTask._setLastResult(null);
+            natuTask._setReturnResult(null);
+            natuTask._setModel(plan.model != null ? findModel(plan.model).get() : parent.model());
+        }
+        // seeded before the task can run anything, and before the system prompt is built,
+        // so a prompt that interpolates an input variable can see it
+        for (Map.Entry<String, Object> entry : taskBuilder.vars().entrySet()) {
+            natuTask.setTaskEnv(entry.getKey(), entry.getValue());
+        }
+        // the resolved spawn seeds, snapshotted here: a child keeps what it was granted at
+        // spawn time, so later parent changes never reach it
+        for (NaruSpawnSeed<String> tag : plan.resolution.tags()) {
+            natuTask._seedToolTagLenient(tag.value());
+        }
+        for (NaruSpawnSeed<String> exclusion : plan.resolution.exclusions()) {
+            natuTask.addToolExclusion(exclusion.value());
+        }
+        for (Map.Entry<String, NaruSpawnSeed<Object>> envEntry : plan.resolution.env().entrySet()) {
+            natuTask.setTaskEnv(envEntry.getKey(), envEntry.getValue().value());
+        }
+        // the context strategy: seed the conversation the child starts with (fork / window /
+        // summary). NONE and strategy-less spawns keep an empty conversation, exactly as
+        // /start has always behaved.
+        if (plan.contextMessages != null && !plan.contextMessages.isEmpty()) {
+            natuTask.setHistory(plan.contextMessages);
+        }
+        natuTask.addSystemHistory(s->NaruMessage.system(buildSystemPrompt(s)));
+        natuTask.runInitHooks(NaruEvent.TASK_SPAWNED);
+        natuTask.addStatements(
+                taskBuilder.statements().stream().map(x -> natuTask.parseStatement(x).get().injected(true)).collect(Collectors.toList())
+                        .stream().map(x -> x.injected(true)).toArray(NaruStatement[]::new));
+        tasks.put(id, natuTask);
+        for (String warning : plan.resolution.warnings()) {
+            log(NaruLogMode.SCRIPT, NMsg.ofC("⚠ %s", warning));
+        }
+        fireSpawnedEvent(natuTask, parent, spawnContext);
+        notifySpawned(natuTask, spawnContext);
+        return natuTask;
+    }
+
+    /**
+     * Resolves the named policy a spec references, failing loudly when the name is unknown
+     * — a silently ignored policy would change what a spawn grants without saying so.
+     */
+    private NaruSpawnPolicy resolveSpawnPolicy(NaruTaskSpec taskBuilder) {
+        String policyName = taskBuilder.policy();
+        if (policyName == null || policyName.isBlank()) {
+            return null;
+        }
+        NaruSpawnPolicy policy = spawnPolicies.get(policyName.trim());
+        if (policy == null) {
+            throw new IllegalArgumentException(
+                    "spawn policy '" + policyName + "' is not defined in this session; "
+                            + "define it first, e.g. /spawn-policy " + policyName + " --inherit=tags");
+        }
+        return policy;
+    }
+
+    private void notifySpawn(NaruSpawnContextImpl spawnContext) {
+        for (NaruSessionExtension extension : registry.sessionExtensions()) {
+            try {
+                extension.onSpawn(spawnContext);
+            } catch (Exception e) {
+                // one broken extension must not cost a spawn
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed in onSpawn: %s",
+                        extension.name(), e).asError());
+            }
+        }
+    }
+
+    private void notifySpawned(NaruTask task, NaruSpawnContextImpl spawnContext) {
+        for (NaruSessionExtension extension : registry.sessionExtensions()) {
+            try {
+                extension.onSpawned(this, task, spawnContext);
+            } catch (Exception e) {
+                // one broken extension must not cost a spawn
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed in onSpawned: %s",
+                        extension.name(), e).asError());
+            }
+        }
+    }
+
+    /**
+     * Fires {@link NaruEvent#SESSION_START} and gives each feature its
+     * {@link NaruSessionExtension#onSessionStart} callback (WP8). This is where a feature
+     * installs session-wide defaults; the workspace-level {@code init.naru} is a script,
+     * so it runs at the first task's creation, when there is a task to carry its
+     * statements. Every callback is isolated: a broken feature may not cost the session.
+     */
+    private void notifySessionStart() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("projectDir", projectDir == null ? null : projectDir.toString());
+        payload.put("workingDir", workingDir == null ? null : workingDir.toString());
+        for (NaruSessionExtension extension : registry.sessionExtensions()) {
+            try {
+                extension.onSessionStart(this);
+            } catch (Exception e) {
+                // one broken extension must not cost the session
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed on session start: %s",
+                        extension.name(), e).asError());
+            }
+        }
+        fireEvent(NaruEvent.SESSION_START, payload);
+    }
+
+    /**
+     * Fires {@link NaruEvent#TASK_SPAWNED} with the resolved sets and the source of every
+     * item. The payload is provenance text only: observing a spawn event never grants a
+     * tag, exclusion or skill — grants are applied directly to the child task before this
+     * event is fired, and the event carries no grant channel.
+     */
+    private void fireSpawnedEvent(NaruTask child, NaruTask parent, NaruSpawnContextImpl spawnContext) {
+        NaruSpawnResolution resolution = spawnContext.resolution();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("child", child.id());
+        payload.put("parent", parent == null ? -1L : parent.id());
+        payload.put("kind", spawnContext.spawnKind());
+        for (String line : resolution.provenanceText()) {
+            int i = line.indexOf('=');
+            if (i > 0) {
+                payload.put(line.substring(0, i), line.substring(i + 1));
+            }
+        }
+        eventLog.append(new NaruEvent(
+                NaruEvent.TASK_SPAWNED,
+                payload,
+                child.id(),
+                parent == null ? -1L : parent.id(),
+                Instant.now(),
+                NaruEventTargets.ofEveryone(),
+                NaruRetentionPolicies.ofDefault()));
+    }
+
+    @Override
+    public NaruSpawnResolution resolveSpawn(NaruTaskSpec taskBuilder) {
+        ensureNotStopped();
+        NaruTask parent = tasks.get(taskBuilder.parentId());
+        NaruSpawnPolicy policy = resolveSpawnPolicy(taskBuilder);
+        NaruSpawnContextImpl spawnContext = new NaruSpawnContextImpl(
+                this, parent, taskBuilder,
+                taskBuilder.spawnKind() == null ? "task" : taskBuilder.spawnKind(),
+                taskBuilder.strategy() == null ? NaruSpawnStrategy.NONE : taskBuilder.strategy(),
+                taskBuilder.windowTurns(), policy, taskBuilder.contract());
+        notifySpawn(spawnContext);
+        NaruSpawnPlanner.plan(this, taskBuilder, spawnContext);
+        return spawnContext.resolution();
+    }
+
+    @Override
+    public void defineSpawnPolicy(NaruSpawnPolicy policy) {
+        if (policy == null || policy.name() == null || policy.name().isBlank()) {
+            throw new IllegalArgumentException("spawn policy needs a name");
+        }
+        spawnPolicies.put(policy.name().trim(), policy);
+    }
+
+    @Override
+    public NOptional<NaruSpawnPolicy> findSpawnPolicy(String name) {
+        if (name == null) {
+            return NOptional.ofNullable(null);
+        }
+        return NOptional.ofNullable(spawnPolicies.get(name.trim()));
+    }
+
+    @Override
+    public Map<String, NaruSpawnPolicy> spawnPolicies() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(spawnPolicies));
+    }
+
+    @Override
+    public NaruTask run(NaruTaskSpec spec) {
+        if (spec == null) {
+            throw new IllegalArgumentException("task spec is required");
+        }
+        if (!isRunning()) {
+            throw new IllegalStateException("session is not running; call start() first, or use run()");
+        }
+        NaruTask task = newTask(spec);
+        // newTask leaves a task held, which is what lets a caller configure it before
+        // anything executes; a spawned run has no such window, so release it here. No
+        // fg() call: foreground decides where interactive input is routed, and hijacking
+        // that from a task the host is already talking to would be rude.
+        task.unhold();
+        return task;
+    }
+
+    @Override
+    public NaruTask run() {
+        if (configuredTask == null) {
+            throw new IllegalStateException(
+                    "this session was built without a task; use run(NaruTaskSpec) to supply one");
+        }
+        if (ranTask) {
+            // the configured task is one specific invocation; silently running it again would
+            // hand back a second result and lose the first without saying so
+            throw new IllegalStateException("run() was already called on this session");
+        }
+        ranTask = true;
+        NaruTask task = configuredTask;
+        // release the task before starting the session: it is created held, so that a caller
+        // can configure it after build() but before anything runs. A task with no statements
+        // finishes as soon as it is first ticked, so there is no window to register later.
+        task.unhold();
+        start();
+        return task;
+    }
+
+    /**
+     * Remembers the task the builder created, so {@link #run()} can run that one rather than
+     * creating a second.
+     */
+    void configuredTask(NaruTask task) {
+        this.configuredTask = task;
+    }
+
+    public Executor runCallbackExecutor() {
+        // the agent is held as the interface type, but the callback pool is an
+        // implementation detail that only the impl class owns. Fall back to running
+        // callbacks on the calling thread rather than failing a completion outright.
+        return agent instanceof NaruAgentImpl impl
+                ? impl.runCallbackExecutor()
+                : Runnable::run;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    private String buildSystemPrompt(NaruTask task) {
+        String s = systemPrompt();
+        if (NBlankable.isBlank(s)) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("You are NARU (Nuts AI Reasoning Unit), a durable actor-model based multi-task agent.\n");
+            if (task.projectDir() != null) {
+                sb.append("Project directory: ").append(task.projectDir()).append('\n');
+            }
+            // No "Available tools" line here: the tool list is already part of the
+            // request sent to the model, and a spawn-time snapshot would go stale as
+            // soon as /tags or /tools change -- two sources of truth for one list.
+            return sb.toString();
+        }
+        return s.trim();
+    }
+
+
+    @Override
+    public NOptional<NaruTask> findTask(long tid) {
+        // deliberately not guarded on 'stopped'. A lookup is a question, not a command, and
+        // the interesting time to ask is precisely when a session has just stopped because
+        // its last task finished -- which is also when callers most want to confirm the task
+        // is gone. Throwing here made that impossible to express.
+        return NOptional.ofNamed(tasks.get(tid), "task " + tid);
+    }
+
+    public NaruSession setSessionEnv(String key, Object value) {
+        ensureNotStopped();
+        if (env.containsKey(key) && Objects.equals(env.get(key).orNull(), value)) {
+            return this;
+        }
+
+        env.put(key, NOptional.ofNullable(value));
+        fireChanged();
+        return this;
+    }
+
+    public NOptional<Object> getSessionEnv(String key) {
+        if (env.containsKey(key)) {
+            Object u = env.get(key).get();
+            return NOptional.ofNullable(u);
+        }
+        return NOptional.ofNamedEmpty(key);
+    }
+
+    @Override
+    public NOptional<NElement> getProjectEnv(String key) {
+        ensureNotStopped();
+        NaruEnv a = agent.env();
+        return a.get(key);
+    }
+
+    @Override
+    public NOptional<NElement> getProjectEnv(String key, NaruVisibility visibility) {
+        ensureNotStopped();
+        NaruEnv a = agent.env();
+        return a.get(key, visibility);
+    }
+
+    @Override
+    public void setProjectEnv(String key, NElement value, NaruVisibility visibility) {
+        ensureNotStopped();
+        NaruEnv a = agent.env();
+        a.put(key, value, visibility);
+    }
+
+
+    @Override
+    public String name() {
+        ensureNotStopped();
+        return name;
+    }
+
+    @Override
+    public NaruSession name(String name) {
+        ensureNotStopped();
+        this.name = NStringUtils.firstNonBlankStripped(name, "NO_NAME");
+        this.fireChanged();
+        return this;
+    }
+
+
+    @Override
+    public Map<String, NaruModelRegistration> registrations() {
+        ensureNotStopped();
+        NaruRegistrationStore store = registrationStore();
+        return store == null ? Map.of() : store.toMap();
+    }
+
+    @Override
+    public void putRegistration(NaruModelRegistration registration) {
+        ensureNotStopped();
+        NaruRegistrationStore store = registrationStore();
+        if (registration != null && store != null) {
+            store.put(registration);
+            reloadRegistrations();
+            fireChanged();
+        }
+    }
+
+    @Override
+    public boolean removeRegistration(String id) {
+        ensureNotStopped();
+        NaruRegistrationStore store = registrationStore();
+        boolean removed = store != null && store.remove(id);
+        if (removed) {
+            reloadRegistrations();
+            fireChanged();
+        }
+        return removed;
+    }
+
+    private NaruRegistrationStore registrationStore() {
+        return agent instanceof NaruAgentImpl ? ((NaruAgentImpl) agent).getRegistrations() : null;
+    }
+
+    /**
+     * Materializes the registration store into the registry (design doc §11): every
+     * registration becomes a provider instance addressed by its id, carrying the
+     * registration's params, so its models list under {@code <id>/<model>} and every
+     * config lookup is scoped to that id.
+     *
+     * <p>Runs at session start and after any write, replacing exactly the instances a
+     * previous run added: a registration edit must reach live instances, and an id
+     * used by a built-in provider is never overwritten or removed.
+     */
+    private void reloadRegistrations() {
+        NaruRegistrationStore store = registrationStore();
+        if (store == null) {
+            return;
+        }
+        Map<String, NaruModelRegistration> regs;
+        try {
+            regs = store.toMap();
+        } catch (RuntimeException e) {
+            // a hand-edited broken entry must fail loudly where it is written, but it
+            // must not prevent the session from starting with the registrations that
+            // are valid
+            warn(NMsg.ofC("⚠ registration store unreadable: %s", e.getMessage()));
+            return;
+        }
+        for (String id : new ArrayList<>(registrationInstanceIds)) {
+            if (!regs.containsKey(id)) {
+                registry.modelProviders().remove(id.toLowerCase());
+                registrationInstanceIds.remove(id);
+            }
+        }
+        for (NaruModelRegistration reg : regs.values()) {
+            String id = reg.id();
+            NaruModelProvider base = registry.provider(reg.provider()).orNull();
+            if (base == null) {
+                warn(NMsg.ofC("⚠ registration '%s' references unknown provider type '%s'",
+                        id, reg.provider()));
+                continue;
+            }
+            NaruModelProvider existing = registry.modelProviders().get(id.toLowerCase());
+            if (existing != null && !registrationInstanceIds.contains(id)) {
+                warn(NMsg.ofC("⚠ registration '%s' : id is already used by provider '%s'",
+                        id, existing.name()));
+                continue;
+            }
+            try {
+                NaruModelProvider instance = base.newInstance(id);
+                for (Map.Entry<String, NElement> e : reg.params().entrySet()) {
+                    String v = registrationParamValue(e.getValue());
+                    if (v != null) {
+                        instance.setParam(e.getKey(), v);
+                    }
+                }
+                registry.registerModelProvider(instance);
+                registrationInstanceIds.add(id);
+            } catch (RuntimeException e) {
+                warn(NMsg.ofC("⚠ registration '%s' could not be instantiated: %s", id, e.getMessage()));
+            }
+        }
+    }
+
+    /**
+     * A registration param as the provider param layer wants it: scalars as text,
+     * arrays as comma-separated values — {@code stop} and friends are stored as
+     * lists but consumed as strings.
+     */
+    private static String registrationParamValue(NElement e) {
+        if (e == null || e.isNull()) {
+            return null;
+        }
+        if (e.isArray()) {
+            List<String> parts = new ArrayList<>();
+            for (NElement c : e.asArray().map(x -> x.children()).orElse(List.of())) {
+                String s = registrationParamValue(c);
+                if (!NBlankable.isBlank(s)) {
+                    parts.add(s);
+                }
+            }
+            return String.join(",", parts);
+        }
+        if (e.isAnyStringOrName()) {
+            return e.asStringValue().orNull();
+        }
+        if (e.isBoolean()) {
+            return e.asBooleanValue().map(String::valueOf).orElse(null);
+        }
+        NOptional<Float> f = e.asFloatValue();
+        if (f.isPresent()) {
+            float v = f.get();
+            if (v == Math.rint(v) && Math.abs(v) < 1.0E15) {
+                return String.valueOf((long) v);
+            }
+            return String.valueOf(v);
+        }
+        return e.asStringValue().orNull();
+    }
+
+    public NOptional<NaruModelConfig> findModel(NaruModelConfig keyOrName) {
+        ensureNotStopped();
+        if (keyOrName == null) {
+            return NOptional.ofNamedEmpty(NMsg.ofC("model"));
+        }
+        if (!NBlankable.isBlank(keyOrName.name())) {
+            NOptional<NaruModelConfig> u = findModel(keyOrName.name());
+            if (u.isPresent()) {
+                return u;
+            }
+        }
+        String p = keyOrName.provider();
+        String n = keyOrName.name();
+        if (NBlankable.isBlank(p)) {
+            return findModel(n);
+        } else if (NBlankable.isBlank(n)) {
+            return NOptional.ofNamedEmpty(NMsg.ofC("model"));
+        } else {
+            return findModel(p + "/" + n);
+        }
+    }
+
+    public NOptional<NaruModelConfig> findModel(String keyOrName) {
+        ensureNotStopped();
+        String ref = keyOrName == null ? null : NStringUtils.stripToNull(keyOrName);
+        if (ref == null) {
+            return NOptional.ofNamedEmpty(NMsg.ofC("model"));
+        }
+        // single provider round: modelsKeys() is network bound, never call it twice
+        List<NaruModelKey> catalog = registry().modelsKeys(this);
+        if (ref.contains("/")) {
+            // 1. fully qualified key "provider/model"
+            NOptional<NaruModelConfig> r = NaruModelKey.parse(ref).map(NaruModelConfig::new);
+            if (r.isPresent() && catalog.contains(r.get().key())) {
+                return NOptional.of(mergeRegistrationParams(r.get()));
+            }
+        } else {
+            // 2. registration id (design §3): accepted bare when it pins exactly one
+            //    model. A registration that pins none (or whose model is not available)
+            //    resolves to nothing here — '/model use' reports its models instead of
+            //    silently picking one.
+            NaruRegistrationStore store = registrationStore();
+            NaruModelRegistration reg = store == null ? null : store.get(ref).orNull();
+            if (reg != null) {
+                List<String> pins = new ArrayList<>(reg.stringList("model"));
+                pins.addAll(reg.stringList("models"));
+                if (pins.size() == 1) {
+                    NaruModelKey k = new NaruModelKey(ref, pins.get(0));
+                    if (catalog.contains(k)) {
+                        return NOptional.of(mergeRegistrationParams(new NaruModelConfig(k)));
+                    }
+                }
+                return NOptional.ofNamedEmpty(NMsg.ofC("registration '%s'", ref));
+            }
+            // 3. exact model name
+            for (NaruModelKey k : catalog) {
+                if (k.model().equals(ref)) {
+                    return NOptional.of(mergeRegistrationParams(new NaruModelConfig(k)));
+                }
+            }
+        }
+        // 4. positional index. The last '/model' listing wins because its own numbering
+        //    (possibly filtered) is what the user is referring to. Only when no listing is
+        //    available do we fall back to the raw catalog order.
+        Integer idx = NLiteral.of(ref).asInt().orNull();
+        if (idx != null) {
+            int i = idx - 1;
+            List<NaruModelKey> listed = listedModels;
+            if (!listed.isEmpty()) {
+                // the listing is authoritative: never silently fall through to another
+                // row, otherwise an out-of-range index selects an unrelated model.
+                if (i >= 0 && i < listed.size()) {
+                    return NOptional.of(mergeRegistrationParams(new NaruModelConfig(listed.get(i))));
+                }
+            } else if (i >= 0 && i < catalog.size()) {
+                return NOptional.of(mergeRegistrationParams(new NaruModelConfig(catalog.get(i))));
+            }
+        }
+        return NOptional.ofNamedEmpty(NMsg.ofC("model '%s'", keyOrName));
+    }
+
+    /**
+     * The registration's model-level params merged into a resolved config (design §7):
+     * params are keyed by instance id, so every model selected under {@code <id>/<model>}
+     * carries that registration's configuration — temperature, contextLength, stop,
+     * thinkingTags, ... — rather than the base provider's.
+     */
+    private NaruModelConfig mergeRegistrationParams(NaruModelConfig c) {
+        if (c == null) {
+            return null;
+        }
+        NaruRegistrationStore store = registrationStore();
+        NaruModelRegistration reg = store == null ? null : store.get(c.provider()).orNull();
+        if (reg == null) {
+            return c;
+        }
+        if (reg.param("contextLength").isPresent()) {
+            c = c.withContextLength(reg.longValue("contextLength").orElse(c.contextLength()));
+        }
+        if (reg.param("temperature").isPresent()) {
+            c = c.withTemperature(reg.floatValue("temperature").orElse(c.temperature()));
+        }
+        if (reg.param("nucleusThreshold").isPresent()) {
+            c = c.withNucleusThreshold(reg.floatValue("nucleusThreshold").orElse(c.nucleusThreshold()));
+        }
+        if (reg.param("candidateCount").isPresent()) {
+            c = c.withCandidateCount(reg.intValue("candidateCount").orElse(c.candidateCount()));
+        }
+        if (reg.param("maxTokens").isPresent()) {
+            c = c.withMaxTokens(reg.intValue("maxTokens").orElse(c.maxTokens()));
+        }
+        if (reg.param("stop").isPresent()) {
+            c = c.withStop(reg.stringList("stop"));
+        }
+        if (reg.param("thinkingTags").isPresent()) {
+            c = c.withThinkingTags(mergeThinkingTags(reg));
+        }
+        return c;
+    }
+
+    /**
+     * The registration's {@code thinkingTags} in whichever shape it was written:
+     * the canonical {@code {openTag, closeTag}} object (a hand-edited file), a
+     * two-element array or an {@code open,close} string (both from
+     * {@code --thinkingTags}). A single unpaired tag is a configuration mistake —
+     * {@link NaruThinkingTags#of(String, String)} reports it instead of silently
+     * pairing it with something that never matches.
+     */
+    private static NaruThinkingTags mergeThinkingTags(NaruModelRegistration reg) {
+        NElement e = reg.param("thinkingTags").orNull();
+        if (e == null || e.isNull()) {
+            return null;
+        }
+        if (e.isAnyObject()) {
+            return NaruThinkingTags.of(e);
+        }
+        List<String> p = reg.stringList("thinkingTags");
+        if (p.size() >= 2) {
+            return NaruThinkingTags.of(p.get(0), p.get(1));
+        }
+        if (p.isEmpty()) {
+            return NaruThinkingTags.of("", "");     // no tags → native-only reasoning
+        }
+        return NaruThinkingTags.of(p.get(0), null); // half a pair → fails loud
+    }
+
+    @Override
+    public List<NaruModelKey> listedModels() {
+        ensureNotStopped();
+        return listedModels;
+    }
+
+    @Override
+    public NaruSession setListedModels(List<NaruModelKey> models) {
+        ensureNotStopped();
+        this.listedModels = models == null ? Collections.emptyList() : List.copyOf(models);
+        return this;
+    }
+
+    @Override
+    public Instant creationInstant() {
+        ensureNotStopped();
+        return creationInstant;
+    }
+
+    @Override
+    public Instant modificationInstant() {
+        ensureNotStopped();
+        return modificationInstant;
+    }
+
+    @Override
+    public String uuid() {
+        return uuid;
+    }
+
+    public void fireChanged() {
+//        ensureNotStopped();
+        this.modificationInstant = Instant.now();
+        persist();
+    }
+
+    /**
+     * Replaces this session's state with what the store holds for {@code uuid} in
+     * {@code scope}.
+     *
+     * <p>Scope is passed rather than read from the field, because the scope is the answer
+     * to where the state is and that is exactly what is being decided here: loading from
+     * the private root and then reporting the session as public would put a private
+     * conversation in a shareable folder.
+     */
+    private NaruSession loadFromStore(String uuid, NaruSessionScope scope) {
+        ensureNotStopped();
+        NaruSessionData data = store.loadData(uuid, scope).orElseThrow(
+                () -> new NIllegalArgumentException(NMsg.ofC("Session '%s' not found in scope %s", uuid, scope)));
+        ensureNotStopped();
+        NObjectElement o = data.toElement().asObject().get();
+        this.uuid = NStringUtils.firstNonBlankStripped(o.getStringValue("uuid").orElse(null), UUID.randomUUID().toString());
+        this.name = NStringUtils.firstNonBlankStripped(o.getStringValue("name").orElse(null), "NO_NAME");
+        this.creationInstant = NUtils.firstNonNull(o.getInstantValue("creationDate").orElse(null), Instant.now());
+        this.modificationInstant = NUtils.firstNonNull(o.getInstantValue("modificationDate").orElse(null), creationInstant);
+        // the scope the state came from is the scope the session is in; visibility is not
+        // stored anywhere, because it *is* the location
+        this.visibility = scope == NaruSessionScope.PUBLIC ? NaruVisibility.PUBLIC : NaruVisibility.PRIVATE;
+        this.loadTimeScope = scope;
+        NElement mv = o.get("model").orElse(null);
+        this.model = mv == null || mv.isNull() ? null : new NaruModelConfig(mv);
+        this.projectDir = data.projectDir() == null ? projectDir : NPath.of(data.projectDir());
+        this.workingDir = data.workingDir() == null ? workingDir : NPath.of(data.workingDir());
+        env.clear();
+        for (Map.Entry<String, Object> e : data.env().entrySet()) {
+            env.put(e.getKey(), NOptional.ofNullable(e.getValue()));
+        }
+
+        routines.clear();
+        for (String name : store.routineNames(uuid, scope)) {
+            NElement r = store.loadRoutine(uuid, scope, name).orNull();
+            if (r != null) {
+                NaruRoutineMem rm = new NaruRoutineMem(r);
+                if (rm != null) {
+                    routines.put(name, rm);
+                }
+            }
+        }
+
+        tasks.clear();
+        NLongRef maxLong = NRef.ofLong(0);
+        for (long taskId : store.taskIds(uuid, scope)) {
+            NaruTaskState state = store.loadTask(uuid, scope, taskId).orNull();
+            if (state == null) {
+                continue;
+            }
+            NaruTaskImpl t = new NaruTaskImpl(withHistory(state), this);
+            maxLong.set(Math.max(maxLong.get(), t.id()));
+            tasks.put(t.id(), t);
+        }
+        long finalMaxLong = maxLong.get() == 0 ? 0 : maxLong.get() + 1;
+        maxTaskId.updateAndGet(current -> Math.max(current, finalMaxLong));
+        loadSessionExtensions(uuid, scope);
+        return this;
+    }
+
+    /**
+     * Puts the history back inline on a task element.
+     *
+     * <p>The engine works with {@link NaruMessage}s in a list; the store keeps them one
+     * file per message. This is the join between the two, and it is the only place that
+     * knows both shapes.
+     */
+    private static NElement withHistory(NaruTaskState state) {
+        NObjectElementBuilder b = NObjectElementBuilder.of();
+        for (NElement child : state.skeleton().asObject().get().children()) {
+            if (child.isNamedPair()) {
+                b.add(child.asPair().get());
+            }
+        }
+        NArrayElementBuilder history = NArrayElementBuilder.of();
+        for (NaruMessage m : state.history()) {
+            history.add(m.toElement());
+        }
+        b.set("history", history.build());
+        return b.build();
+    }
+
+    /**
+     * Brings extensions up on a session that has nothing to restore, so a new session
+     * reaches the same state a reloaded one does, minus the saved data.
+     *
+     * <p>Null state means "nothing persisted", so an extension sees exactly what it would
+     * see if it had never saved anything.
+     */
+    private void openSessionExtensions() {
+        for (NaruSessionExtension extension : registry.sessionExtensions()) {
+            try {
+                extension.load(this, null);
+                extension.open(this);
+            } catch (Exception ex) {
+                // one broken extension must not cost the user the whole session
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed to open: %s", extension.name(), ex.getMessage()).asError());
+            }
+        }
+    }
+
+    /**
+     * Hands each installed feature extension the state it saved. Extensions own their
+     * state, so the core neither knows nor cares what is in it.
+     */
+    private void loadSessionExtensions(String uuid, NaruSessionScope scope) {
+        for (NaruSessionExtension extension : registry.sessionExtensions()) {
+            try {
+                extension.load(this, store.loadExtensionState(uuid(), scope, extension.name()).orNull());
+                extension.open(this);
+            } catch (Exception ex) {
+                // one broken extension must not cost the user the whole session
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed to load: %s", extension.name(), ex.getMessage()).asError());
+            }
+        }
+    }
+
+    private static NaruRoutineMem loadRoutineTson(NPath x) {
+        NaruRoutineMem r = null;
+        try {
+            r = new NaruRoutineMem(NElementReader.ofTson().ntf(false).read(x));
+        } catch (Exception ex) {
+            //
+        }
+        return r;
+    }
+
+    private static NaruRoutineMem loadRoutineText(NPath x) {
+        NaruRoutineMem r = null;
+        try {
+            r = new NaruRoutineMem(NElementReader.ofTson().ntf(false).read(x));
+        } catch (Exception ex) {
+            //
+        }
+        return r;
+    }
+
+
+    @Override
+    public NaruSession copy() {
+        ensureNotStopped();
+        this.uuid = UUID.randomUUID().toString();
+        fireReloaded();
+        for (NaruSessionListener listener : sessionListeners) {
+            listener.onSessionReloaded(this);
+        }
+        return this;
+    }
+
+    @Override
+    public NaruSession reset(boolean preserveIdentity) {
+        ensureNotStopped();
+        if (!preserveIdentity) {
+            this.uuid = UUID.randomUUID().toString();
+            this.name = "NO_NAME";
+            this.creationInstant = Instant.now();
+            this.modificationInstant = creationInstant;
+        }
+        //clearHistory();
+        maxTaskId.set(0);
+        persist();
+        fireReloaded();
+        for (NaruSessionListener listener : sessionListeners) {
+            listener.onSessionReloaded(this);
+        }
+        return this;
+    }
+
+    private <T> T stopTheWorldAndWait(NCallable<T> e) {
+        NaruSchedulerImpl s = (NaruSchedulerImpl) scheduler;
+        // step out of the tick this runs in (if any) before waiting on the action:
+        // a worker blocked here would otherwise still be counted as ticking, and
+        // hold() would wait for itself forever.
+        boolean wasTicking = s.parkForStopTheWorld();
+        try {
+            Future<T> f = stopTheWorldAndDo(e);
+            return f.get();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(ex);
+        } catch (ExecutionException ex) {
+            throw new RuntimeException(ex);
+        } finally {
+            s.unparkAfterStopTheWorld(wasTicking);
+        }
+    }
+
+    private <T> Future<T> stopTheWorldAndDo(NCallable<T> e) {
+//        ensureNotStopped();
+        return ((NaruAgentImpl) agent).postAction(
+                () -> {
+                    if (!scheduler.isHeld()) {
+                        log(NaruLogMode.SCHEDULER, NMsg.ofC("Stop the world..."));
+                        scheduler.hold();
+                        try {
+                            return e.call();
+                        } finally {
+                            scheduler.resume();
+                        }
+                    } else {
+                        return e.call();
+                    }
+                }
+        );
+    }
+
+    @Override
+    public NaruSession persist() {
+        stopTheWorldAndDo(() -> {
+            writeToStore(scopeForNewState());
+            return null;
+        });
+        return this;
+    }
+
+    @Override
+    public NaruSession save() {
+        stopTheWorldAndWait(() -> {
+            NaruSessionScope wanted = getVisibility() == NaruVisibility.PUBLIC
+                    ? NaruSessionScope.PUBLIC : NaruSessionScope.PRIVATE;
+            writeToStore(wanted);
+            return null;
+        });
+        return this;
+    }
+
+    /**
+     * Where a session's state goes, given its visibility.
+     *
+     * <p>Kept in one place because two callers need it and they must agree: {@link #save()}
+     * writes here, and {@link #persist()} writes here too. A session that had been loaded
+     * from one scope and then changed visibility writes to the new scope, so the old
+     * folder is moved aside rather than left to be found by a later {@code /session list}.
+     */
+    private NaruSessionScope scopeForNewState() {
+        return getVisibility() == NaruVisibility.PUBLIC ? NaruSessionScope.PUBLIC : NaruSessionScope.PRIVATE;
+    }
+
+    /**
+     * Writes the whole session, and moves it to the requested scope if it is not there.
+     *
+     * <p>Order matters. State is written into the current scope first, because that folder
+     * exists and is known good; only then is it moved. Moving first would mean writing into
+     * a directory the store had not yet been told about, and a crash between the two would
+     * leave the session in a scope the user asked to leave.
+     */
+    private void writeToStore(NaruSessionScope scope) {
+        NaruSessionScope current = store.scopeOf(uuid()).orElse(null);
+        if (current == scope) {
+            writeStateInPlace(scope);
+        } else {
+            writeStateInPlace(current == null ? scope : current);
+            if (current != null) {
+                store.move(uuid(), current, scope);
+            }
+            this.loadTimeScope = scope;
+        }
+    }
+
+    private void writeStateInPlace(NaruSessionScope scope) {
+        if (!store.exists(uuid(), scope)) {
+            store.create(sessionData(), scope);
+        } else {
+            store.saveData(sessionData(), scope);
+        }
+        for (NaruTask t : tasks.values()) {
+            store.saveTask(uuid(), scope, taskState((NaruTaskImpl) t));
+        }
+        for (Map.Entry<String, NaruRoutine> e : routines.entrySet()) {
+            store.saveRoutine(uuid(), scope, e.getKey(), e.getValue().toElement());
+        }
+        saveSessionExtensions(scope);
+    }
+
+    /** This session's metadata as the store's own value type. */
+    private NaruSessionData sessionData() {
+        Map<String, Object> values = new LinkedHashMap<>();
+        for (Map.Entry<String, NOptional<Object>> e : env.entrySet()) {
+            values.put(e.getKey(), e.getValue().orNull());
+        }
+        return new NaruSessionData()
+                .uuid(uuid())
+                .name(name())
+                .creationInstant(creationInstant)
+                .modificationInstant(modificationInstant)
+                .model(model == null ? null : model.toElement())
+                .projectDir(projectDir.toString())
+                .workingDir(workingDir == null ? null : workingDir.toString())
+                .env(values);
+    }
+
+    /**
+     * A task as the store's own value type: skeleton without history, plus the messages.
+     */
+    private NaruTaskState taskState(NaruTaskImpl task) {
+        NElement element = task.toElement();
+        return NaruTaskState.ofInline(task.id(), element);
+    }
+
+    /**
+     * Asks each installed feature extension to persist its state.
+     *
+     * <p>This runs on every {@link #persist()}, not only on a user-initiated save, so
+     * extension save hooks are expected to be cheap and idempotent.
+     */
+    private void saveSessionExtensions(NaruSessionScope scope) {
+        for (NaruSessionExtension extension : registry.sessionExtensions()) {
+            try {
+                NElement state = extension.save(this);
+                if (state == null) {
+                    // an extension with nothing to persist must not leave a stale record
+                    // behind, or a later load would resurrect discarded state
+                    store.deleteExtensionState(uuid(), scope, extension.name());
+                } else {
+                    store.saveExtensionState(uuid(), scope, extension.name(), state);
+                }
+            } catch (Exception ex) {
+                // failing to persist one extension must not fail the whole session save
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed to save: %s", extension.name(), ex.getMessage()).asError());
+            }
+        }
+    }
+
+    public NaruSession load(String otherUuid) {
+        stopTheWorldAndWait(() -> {
+            NaruSessionScope scope = store.scopeOf(otherUuid).orElseThrow(
+                    () -> new NIllegalArgumentException(NMsg.ofC("Session '%s' not found", otherUuid)));
+            loadFromStore(otherUuid, scope);
+            setVisibility(scope == NaruSessionScope.PUBLIC ? NaruVisibility.PUBLIC : NaruVisibility.PRIVATE);
+            ((NaruSchedulerImpl) scheduler).reloadState();
+            return this;
+        });
+        fireReloaded();
+        for (NaruSessionListener listener : sessionListeners) {
+            listener.onSessionReloaded(this);
+        }
+        return this;
+    }
+
+
+//    @Override
+//    public NaruSession reload() {
+//        stopTheWorldAndWait(() -> {
+//            // The scope to reload from is the one this session was last loaded from or
+//            // written to. Looking in "both, private first" instead would make a session
+//            // that was deliberately made public silently come back private if a stale
+//            // private folder survived a move.
+//            NaruSessionScope scope = loadTimeScope != null ? loadTimeScope : scopeForNewState();
+//            if (store.exists(uuid(), scope)) {
+//                loadFromStore(uuid(), scope);
+//                setVisibility(scope == NaruSessionScope.PUBLIC ? NaruVisibility.PUBLIC : NaruVisibility.PRIVATE);
+//            } else {
+//                // nothing stored under this uuid: this session has never been saved, so
+//                // it is a new session rather than a broken one
+//                this.uuid = UUID.randomUUID().toString();
+//                this._prepareInit();
+//            }
+//            ((NaruSchedulerImpl) scheduler).reloadState();
+//            return null;
+//        });
+//        fireReloaded();
+//        for (NaruSessionListener listener : sessionListeners) {
+//            listener.onSessionReloaded(this);
+//        }
+//        return this;
+//    }
+
+    @Override
+    public NaruSession restoreFromStore() {
+        Boolean b = stopTheWorldAndWait(() -> {
+            NaruSessionScope scope = loadTimeScope != null ? loadTimeScope : scopeForNewState();
+            if (store.exists(uuid(), scope)) {
+                loadFromStore(uuid(), scope);
+                setVisibility(scope == NaruSessionScope.PUBLIC ? NaruVisibility.PUBLIC : NaruVisibility.PRIVATE);
+                ((NaruSchedulerImpl) scheduler).reloadState();
+                return true;
+            }
+            return false;
+        });
+        if (b) {
+            fireReloaded();
+            for (NaruSessionListener listener : sessionListeners) {
+                listener.onSessionReloaded(this);
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Tells the owning agent this session's state was reloaded. A session built without an
+     * agent listener is legitimate (tests embed one directly), so the callback is optional.
+     */
+    private void fireReloaded() {
+        if (sessionListener != null) {
+            sessionListener.onSessionReloaded(this);
+        }
+    }
+
+    private void _prepareInit() {
+        this.name = "NO_NAME";
+        this.creationInstant = Instant.now();
+        this.modificationInstant = creationInstant;
+        this.maxTaskId.set(0);
+        this.loadTimeScope = null;
+    }
+
+    @Override
+    public NElement toElement() {
+        NObjectElementBuilder o = NObjectElementBuilder.of();
+        o.set("uuid", uuid());
+        o.set("name", name());
+        o.set("creationDate", NElement.ofInstant(creationInstant));
+        o.set("modificationDate", NElement.ofInstant(modificationInstant));
+        o.set("model", model == null ? null : model.toElement());
+        o.set("projectDir", NElement.ofString(projectDir.toString()));
+        o.set("workingDir", workingDir == null ? null : NElement.ofString(workingDir.toString()));
+        NObjectElementBuilder _props = NObjectElementBuilder.of();
+        for (Map.Entry<String, NOptional<Object>> e : env.entrySet()) {
+            _props.add(e.getKey(), NElement.of(e.getValue().orNull()));
+        }
+        o.set("env", _props.build());
+        return o.build();
+    }
+
+    /**
+     * Pushes a line of user input into the session. This is how a headless host answers a
+     * question: it hands the text over whenever it arrives, from any thread, and the task
+     * that asked resumes.
+     */
+    @Override
+    public void deliverInput(String line) {
+        ensureNotStopped();
+        NaruTask fg = findTask(foregroundTaskId).orNull();
+        if (fg == null) {
+            handleSessionCommand(line);
+            return;
+        }
+        if (fg.status() == NaruTaskStatus.BLOCKED_ON_INPUT) {
+            ((NaruTaskSchedulerView) fg).deliverInput(line);// store in task
+            ((NaruSchedulerImpl) scheduler).ready(fg.id());
+        }
+    }
+
+    /**
+     * Called by the scheduler when a task becomes BLOCKED_ON_INPUT. The question is handed
+     * to the interaction, which decides whether that means blocking a terminal thread or
+     * pushing it to a browser.
+     */
+    public void onInputRequested(NaruTask task) {
+        ensureNotStopped();
+        interaction.requestInput(new TaskInputRequest(task));
+    }
+
+    /**
+     * One outstanding question, as seen by the interaction.
+     * <p>
+     * Guarded so the first answer wins. Without it, a browser that reconnects and replays
+     * a submission would resume the same task twice, and the two runs would interleave
+     * their statements into one history.
+     */
+    private final class TaskInputRequest implements NaruInputRequest {
+        private final NaruTask task;
+        private final AtomicBoolean answered = new AtomicBoolean();
+
+        TaskInputRequest(NaruTask task) {
+            this.task = task;
+        }
+
+        @Override
+        public NMsg prompt() {
+            return ((NaruTaskSchedulerView) task).pendingPrompt();
+        }
+
+        @Override
+        public NaruTask task() {
+            return task;
+        }
+
+        @Override
+        public void deliver(String line) {
+            if (!answered.compareAndSet(false, true)) {
+                return;
+            }
+            if (stopped) {
+                return;
+            }
+            ((NaruTaskSchedulerView) task).deliverInput(line);
+            ((NaruTaskSchedulerView) task).status(NaruTaskStatus.READY);
+            ((NaruSchedulerImpl) scheduler).enqueue(task);
+        }
+
+        @Override
+        public void cancel(String reason) {
+            if (!answered.compareAndSet(false, true)) {
+                return;
+            }
+            if (stopped) {
+                return;
+            }
+            // Nobody is going to answer, so the task must not stay blocked forever.
+            log(NaruLogMode.SCRIPT, NMsg.ofC("input cancelled: %s", reason));
+            try {
+                // publish the reason before the transition: the task is about to deregister
+                // itself, and error() is the only place left that can say why it failed. Without
+                // this a FAILED task reports no reason at all, because the cancellation is the
+                // engine's doing and no statement ever wrote it.
+                task.setTaskEnv("lastError", reason);
+                ((NaruTaskSchedulerView) task).status(NaruTaskStatus.FAILED);
+            } catch (Exception ignored) {
+                // a task that refuses to change state is already terminal
+            }
+        }
+    }
+
+    private void handleSessionCommand(String line) {
+        ensureNotStopped();
+        //
+    }
+
+    @Override
+    public void log(NaruLogMode mode, NMsg s) {
+        if (mode == NaruLogMode.SCHEDULER && !isTrace()) {
+            return;
+        }
+        interaction.write(mode, s);
+    }
+
+    @Override
+    public void logStream(NaruLogMode mode, NMsg fragment, boolean end) {
+        if (mode == NaruLogMode.SCHEDULER && !isTrace()) {
+            return;
+        }
+        interaction.writeStream(mode, fragment, end);
+    }
+
+    /**
+     * A problem the user needs to know about but that is not a statement to execute.
+     * <p>
+     * Routed through the session's own interaction rather than the process stdout: with
+     * several sessions running, output written straight to the console cannot be traced
+     * back to the session that produced it.
+     */
+    void warn(NMsg message) {
+        interaction.write(NaruLogMode.SCRIPT, message);
+    }
+
+    private boolean isTrace() {
+        return getSessionEnv("trace").map(x -> NLiteral.of(x).asBoolean().orNull()).orElse(false);
+    }
+
+
+    public void _reportUsing(NPath source) {
+        if (alreadyLoadedFiles.add(source)) {
+            log(NaruLogMode.AGENT_RESPONSE, NMsg.ofC("Loading agent from %s", source));
+        }
+    }
+
+    public List<NPath> listOverridablePaths(NPath publicPath, NPath privatePath, Predicate<String> nameFilter) {
+        ensureNotStopped();
+        Map<String, NPath> publicFiles = publicPath.list().stream().filter(x -> x.isRegularFile() && nameFilter.test(x.name())).collect(Collectors.toMap(x -> x.name(), x -> x));
+        Map<String, NPath> privateFiles = privatePath.list().stream().filter(x -> x.isRegularFile() && nameFilter.test(x.name())).collect(Collectors.toMap(x -> x.name(), x -> x));
+        Map<String, NPath> all = new HashMap<>();
+        all.putAll(publicFiles);
+        all.putAll(privateFiles);
+        return all.values().stream().sorted(Comparator.comparing(NPath::name)).collect(Collectors.toList());
+    }
+
+    private List<NaruMessage> loadAgentClassPath(String[] agentFileNames) {
+        ensureNotStopped();
+        Set<ClassLoader> classLoaders = new LinkedHashSet<>(Arrays.asList(
+                getClass().getClassLoader(),
+                Thread.currentThread().getContextClassLoader()
+        ));
+        StringBuilder sb = new StringBuilder();
+        Set<String> validNames = new TreeSet<>();
+        for (String agentFileName : agentFileNames) {
+            String r = "META-INF/naru/agents/" + agentFileName;
+            for (ClassLoader classLoader : classLoaders) {
+                URL u = classLoader.getResource(r);
+                if (u != null) {
+                    byte[] b = NIOUtils.readBytes(u);
+                    if (b.length > 0) {
+                        if (alreadyLoadedFiles.add(NPath.of(u))) {
+                            log(NaruLogMode.AGENT_RESPONSE, NMsg.ofC("Loading agent from %s", NPath.of(u)));
+                        }
+                        String content = new String(b, StandardCharsets.UTF_8).trim();
+                        if (!NBlankable.isBlank(content)) {
+                            if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') {
+                                sb.append("\n");
+                            }
+                            validNames.add(u.toString());
+                            sb.append(content);
+                        }
+                    }
+                }
+            }
+        }
+        if (sb.toString().trim().length() > 0) {
+            return Collections.singletonList(NaruMessage.user(
+                    "### AGENT CLASSPATH:\n" + sb
+            ).setSource(NaruSource.CLASSPATH).setSourceName(validNames.size() == 1 ? validNames.stream().findFirst().get() : validNames.toString()));
+        }
+        return new ArrayList<>();
+    }
+
+
+    public NPath workingDir() {
+        ensureNotStopped();
+        return workingDir;
+    }
+
+    public NaruSession workingDir(NPath workingDir) {
+        ensureNotStopped();
+        NPath nf = workingDir.toAbsolute(this.workingDir);
+        if (!nf.equals(this.workingDir)) {
+            this.workingDir = nf;
+            fireChanged();
+        }
+        return this;
+    }
+
+
+    /**
+     * The store configuration for this project.
+     *
+     * <p>The store directory is derived from the project directory, so a store can be
+     * relocated wholesale without touching anything above it. Scope comes from project
+     * configuration, which is the only place a default belongs -- the brief calls for
+     * private, and a project that wants its sessions shared says so in one line.
+     */
+    private NaruStoreConfig storeConfig() {
+        // a misspelled or absent scope key falls back to the default rather than failing:
+        // refusing to start over a typo in a config key is a poor trade
+        NaruSessionScope defaultScope = NaruSessionScope.parse(
+                getProjectEnv("session.defaultScope").flatMap(x -> x.asStringValue()).orNull());
+        if (defaultScope == null) {
+            defaultScope = NaruSessionScope.PRIVATE;
+        }
+        return new NaruStoreConfig(projectDir.normalize(),
+                projectDir.normalize().resolve(".naru"), defaultScope);
+    }
+
+    /**
+     * The configured store name, or null for the default implementation.
+     *
+     * <p>Read from the session's own environment rather than from a field, because it
+     * decides where this very object will write and so cannot be read back out of one.
+     * The system property is the escape hatch for a one-off run against a different
+     * backend, which is exactly the case a config file is the wrong tool for.
+     */
+    private String storeName() {
+        String fromProperty = System.getProperty("naru.session.store");
+        if (fromProperty != null && !fromProperty.trim().isEmpty()) {
+            return fromProperty.trim();
+        }
+        return getProjectEnv("session.store").flatMap(x -> x.asStringValue()).orNull();
+    }
+
+    @Override
+    public NPath projectDir() {
+        ensureNotStopped();
+        return projectDir;
+    }
+
+    /**
+     * Changes the project root (WP7). Every live task follows the new root, each feature is
+     * told through {@link NaruSessionExtension#onProjectChanged} so it can re-resolve what
+     * is rooted at the project (skill roots, for one), and {@code project-change} is fired.
+     * <p>
+     * Per-task selections and granted tag sets are deliberately untouched: only
+     * <em>availability</em> is re-resolved, so a loaded skill that disappeared at the new
+     * root is reported by the feature's own doctor instead of being silently dropped.
+     * <p>
+     * Storage is not migrated: this session keeps writing to the store it was created with
+     * (O9). Running the workspace init is the caller's job -- {@code /project} calls
+     * {@link NaruTask#runInitHooks} once after this returns.
+     */
+    @Override
+    public NaruSession projectDir(NPath projectDir) {
+        ensureNotStopped();
+        NPath nf = projectDir.toAbsolute(this.projectDir).normalize();
+        NPath old = this.projectDir;
+        if (!nf.equals(old)) {
+            this.projectDir = nf;
+            // live tasks follow the root; the setProjectDir setter fires their change too,
+            // so each task's projectDir() answer stays consistent between this call and
+            // the next tick
+            for (NaruTask t : tasks.values()) {
+                t.setProjectDir(nf);
+            }
+            for (NaruSessionExtension extension : registry.sessionExtensions()) {
+                try {
+                    extension.onProjectChanged(this, old, nf);
+                } catch (Exception e) {
+                    // one broken feature must not break the navigation
+                    log(NaruLogMode.SCRIPT, NMsg.ofC(
+                            "session extension '%s' failed on project change: %s",
+                            extension.name(), e).asError());
+                }
+            }
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("oldProjectDir", old == null ? null : old.toString());
+            payload.put("newProjectDir", nf.toString());
+            fireEvent(NaruEvent.PROJECT_CHANGE, payload);
+            fireChanged();
+        }
+        return this;
+    }
+
+    /**
+     * Appends a session-scoped event with no task as its source. Used for
+     * {@link NaruEvent#SESSION_START} and {@link NaruEvent#PROJECT_CHANGE}, which are
+     * notifications about the session itself rather than about a task.
+     */
+    @Override
+    public NaruSession fireEvent(String eventName, Map<String, Object> payload) {
+        eventLog.append(new NaruEvent(
+                eventName,
+                payload == null ? new LinkedHashMap<>() : payload,
+                -1L, -1L, Instant.now(),
+                NaruEventTargets.ofEveryone(),
+                NaruRetentionPolicies.ofDefault()));
+        return this;
+    }
+
+    /**
+     * The deprecated init-on-cd flag. Read once (a system property wins, then the session
+     * environment, then the project configuration) and cached: the value is a migration
+     * switch, not something that should be re-read mid-session.
+     */
+    public boolean isInitOnCdEnabled() {
+        if (initOnCdEnabled == null) {
+            initOnCdEnabled = resolveInitOnCd();
+        }
+        return initOnCdEnabled;
+    }
+
+    private boolean resolveInitOnCd() {
+        String[] keys = {"naru.initOnCd", "session.initOnCd", "init.onCd"};
+        String sys = System.getProperty("naru.initOnCd");
+        if (sys != null && !sys.trim().isEmpty()) {
+            return NLiteral.of(sys.trim()).asBoolean().orElse(false);
+        }
+        for (String key : keys) {
+            Boolean b = getSessionEnv(key).map(x -> NLiteral.of(x).asBoolean().orNull()).orNull();
+            if (b != null) {
+                return b;
+            }
+        }
+        for (String key : keys) {
+            Boolean b = getProjectEnv(key).map(x -> NLiteral.of(x).asBoolean().orNull()).orNull();
+            if (b != null) {
+                return b;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * One warning per session, on the first {@code /cd} that would have run hooks under the
+     * old behaviour. Repeating it on every navigation would bury it.
+     */
+    public void warnInitOnCdDeprecated() {
+        if (!initOnCdWarned) {
+            initOnCdWarned = true;
+            warn(NMsg.ofC("⚠ init-on-cd is deprecated: '/cd' no longer runs "
+                    + ".naru/hooks/init.naru. Use '/project <dir>' to switch project (it runs "
+                    + "the workspace init once), or set naru.initOnCd=true to keep the old "
+                    + "behaviour temporarily."));
+        }
+    }
+
+    @Override
+    public NaruSession terminate() {
+        // Idempotent, like stop(): terminating an already stopped/terminated session
+        // is a no-op instead of throwing (ensureNotStopped would throw).
+        if (stopped) {
+            return this;
+        }
+        for (Map.Entry<Long, NaruTask> e : new HashMap<>(tasks).entrySet()) {
+            e.getValue().kill();
+        }
+        return this;
+    }
+
+    public boolean hasMoreStatements() {
+        ensureNotStopped();
+        for (Map.Entry<Long, NaruTask> e : new HashMap<>(tasks).entrySet()) {
+            if (e.getValue().hasMoreStatements()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public NaruAgent agent() {
+        ensureNotStopped();
+        return agent;
+    }
+
+    @Override
+    public NaruSessionStoreManager sessionStoreManager() {
+        ensureNotStopped();
+        return sessionStoreManager;
+    }
+
+    @Override
+    public NaruRegistry registry() {
+        // See eventLog(): a worker can be mid-tick when the session is marked stopped, and the
+        // registry is a lookup of things that outlive the session, not new work being started.
+        return registry;
+    }
+
+    @Override
+    public long foregroundTaskId() {
+        // Asked from the terminal path itself, so it must answer even while winding down --
+        // rejecting here would turn an ordinary task ending into a scheduler worker failure.
+        return foregroundTaskId;
+    }
+
+    @Override
+    public NaruSession foregroundTaskId(long taskId) {
+        ensureNotStopped();
+        this.foregroundTaskId = taskId;
+        return this;
+    }
+
+
+    @Override
+    public NaruSession start() {
+        ensureNotStopped();
+        if (running) {
+            return this;
+        }
+        ((NaruRegistryImpl) registry).openToolsets();
+        running = true;
+        // The interaction owns whatever thread it needs, and starts none at all when it is
+        // headless. Opening it before the scheduler means input can be accepted from the
+        // moment the first task starts asking.
+        interaction.open(this);
+
+        scheduler.start();
+        notifySessionStart();
+        if (sessionListener != null) {
+            sessionListener.sessionStarted(this);
+        }
+        for (NaruSessionListener listener : sessionListeners) {
+            listener.sessionStarted(this);
+        }
+        return this;
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running && !stopped;
+    }
+
+    @Override
+    public NaruSession stop() {
+        if (!running) {
+            return this;
+        }
+        if (stopped || stopping) {
+            // 'stopping' catches the reentrant call: killing a task below deregisters it, and
+            // deregistering the last task stops the session. Without this the whole teardown
+            // below would run twice, announcing the stop to every listener twice.
+            return this;
+        }
+        stopping = true;
+        // Stopping does not drive tasks to a terminal state, so anything still running would
+        // keep anyone waiting on it blocked forever. Kill them while the session is still able
+        // to record the transition -- a task that reports its own ending calls back into
+        // onTerminated(), which insists the session is not yet stopped -- and before closing
+        // the interaction below, since closing it cancels a pending input request and would
+        // race this to decide who reports the ending.
+        //
+        // A task is its own handle, so this needs no registry of waiting callers: reaching
+        // into each live task is enough, and the list it walks is the one it already keeps.
+        for (NaruTask task : new ArrayList<>(tasks.values())) {
+            task.cancel("session stopped");
+        }
+        stopped = true;
+        scheduler.shutdown();
+        running = false;
+        // close the interaction before announcing the stop: that cancels any input request
+        // still waiting, so a worker is never left blocked on a question the host is gone
+        // for. The terminal interaction also shuts down its readline thread here.
+        ((NaruRegistryImpl) registry).closeToolsets();
+        interaction.close();
+        if (sessionListener != null) {
+            sessionListener.sessionStopped(this);
+        }
+        for (NaruSessionListener listener : sessionListeners) {
+            listener.sessionStopped(this);
+        }
+        return this;
+    }
+
+    @Override
+    public void addSessionListener(NaruSessionListener listener) {
+        ensureNotStopped();
+        if (listener != null) {
+            sessionListeners.add(listener);
+        }
+    }
+
+    @Override
+    public void addUsageListener(NaruSessionUsageListener listener) {
+        if (listener != null) {
+            usageListeners.add(listener);
+        }
+    }
+
+    @Override
+    public void removeUsageListener(NaruSessionUsageListener listener) {
+        usageListeners.remove(listener);
+    }
+
+    /**
+     * Announces a completed model call to every usage listener.
+     * <p>
+     * A listener that throws is skipped rather than allowed to fail the call it is only
+     * observing: metering and rate-limit reporting are side channels, and a broken one
+     * must not cost the user their answer.
+     */
+    public void fireModelCallUsage(NaruModelKey model, long promptTokens, long completionTokens,
+                            long cacheWriteTokens, long cacheReadTokens, NDuration duration) {
+        for (NaruSessionUsageListener l : usageListeners) {
+            try {
+                l.onModelCall(model, promptTokens, completionTokens, cacheWriteTokens, cacheReadTokens, duration);
+            } catch (Exception ex) {
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "usage listener %s failed on model call: %s", l.getClass().getSimpleName(), ex.getMessage()));
+            }
+        }
+    }
+
+    @Override
+    public void reportProviderRateLimits(NaruProviderRateLimitInfo info) {
+        if (info == null) {
+            return;
+        }
+        for (NaruSessionUsageListener l : usageListeners) {
+            try {
+                l.onProviderRateLimits(info);
+            } catch (Exception ex) {
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "usage listener %s failed on rate limits: %s", l.getClass().getSimpleName(), ex.getMessage()));
+            }
+        }
+    }
+
+    @Override
+    public void removeSessionListener(NaruSessionListener listener) {
+        ensureNotStopped();
+        if (listener != null) {
+            sessionListeners.remove(listener);
+        }
+    }
+
+    @Override
+    public NaruSession waitFor() {
+        // Note: intentionally not calling ensureNotStopped() here. In batch usage the
+        // session commonly finishes (and therefore stops itself) before waitFor() is
+        // even called; that race must simply return instead of throwing.
+        // Only the scheduler is awaited. The interaction closes itself in stop(), and a
+        // headless session has no thread to wait for at all.
+        scheduler.awaitTermination();
+        return this;
+    }
+
+    @Override
+    public String systemPrompt() {
+        return systemPrompt;
+    }
+
+    @Override
+    public NaruSession systemPrompt(String systemPrompt) {
+        ensureNotStopped();
+        this.systemPrompt = systemPrompt;
+        return this;
+    }
+
+    public void onTerminated(long tid) {
+        // deliberately not guarded on 'stopped', for the same reason onTaskStatusChanged is
+        // not: this is a notification that a task reached a terminal state, and a session can
+        // reach that state *because* it was stopped. Guarding here used to throw out of
+        // NaruTaskImpl.status() before the transition was published, so a task killed after
+        // its session stopped never reported KILLED to anyone -- including a task
+        // awaiting it, which then waited forever.
+        if (foregroundTaskId() == tid) {
+            foregroundTaskId(-1);
+        }
+        if (tasks.containsKey(tid)) {
+            NaruTask i = tasks.remove(tid);
+            notifyTaskDeregistered(tid);
+            Map<String, Object> payload = NMaps.of(
+                    "status", i.status().name(),
+                    "name", i.name()
+            );
+            ((NaruSchedulerImpl) scheduler).onTerminated(tid);
+            eventLog.append(new NaruEvent(
+                    NaruEvent.TASK_TERMINATED,
+                    payload, tid, i.parentId(), Instant.now(), NaruEventTargets.ofEveryone(), NaruRetentionPolicies.ofDefault()));
+            if (tasks.isEmpty()) {
+                stop();
+            }
+        }
+    }
+
+    /**
+     * Tells each installed extension that a task has left the session, so per-task state
+     * does not accumulate dead ids. One broken extension must not cost the terminal
+     * transition, hence the catch.
+     */
+    private void notifyTaskDeregistered(long tid) {
+        for (NaruSessionExtension extension : registry.sessionExtensions()) {
+            try {
+                extension.onTaskDeregistered(this, tid);
+            } catch (Exception e) {
+                log(NaruLogMode.SCRIPT, NMsg.ofC(
+                        "session extension '%s' failed on task %s deregistration: %s",
+                        extension.name(), tid, e.getMessage()).asError());
+            }
+        }
+    }
+
+    /**
+     * Dispatches a task status transition to session listeners.
+     * <p>
+     * Note that {@link #onTerminated(long)} runs first for terminal states and
+     * unregisters the task, so a listener must use the {@code task} argument
+     * rather than {@code findTask(id)} — by the time it is called the lookup
+     * already returns empty.
+     */
+    public void onTaskStatusChanged(NaruTask task, NaruTaskStatus oldStatus, NaruTaskStatus newStatus) {
+        // deliberately not guarded on 'stopped': onTerminated() stops the session when the
+        // last task dies, and a listener must still observe that final transition
+        try {
+            if (sessionListener != null) {
+                sessionListener.onTaskStatusChanged(task, oldStatus, newStatus);
+            }
+        } catch (Throwable error) {
+            // must not escape: this runs inside NaruTaskImpl.status(), so a
+            // throwing listener would otherwise fail the task being ticked
+            log(NaruLogMode.SCHEDULER, NMsg.ofC("[%s] session listener failed on task %s: %s",
+                    error, task.id(), newStatus).asError());
+        }
+        for (NaruSessionListener listener : sessionListeners) {
+            try {
+                listener.onTaskStatusChanged(task, oldStatus, newStatus);
+            } catch (Throwable error) {
+                // must not escape: this runs inside NaruTaskImpl.status(), so a
+                // throwing listener would otherwise fail the task being ticked
+                log(NaruLogMode.SCHEDULER, NMsg.ofC("[%s] session listener failed on task %s: %s",
+                        error, task.id(), newStatus).asError());
+            }
+        }
+    }
+
+    @Override
+    public NaruSessionEventLog eventLog() {
+        // Deliberately not guarded by ensureNotStopped(). Stopping does not wait for the
+        // scheduler workers to finish -- shutdown only asks them to stop, and a worker part way
+        // through a tick keeps going for a moment -- so a worker can reach this after the
+        // session was marked stopped. Throwing here killed the worker from inside the inbox
+        // drain, which is the one place that can least afford to die. The log is also how a
+        // caller inspects a session that has stopped, so it has to stay readable regardless.
+        return eventLog;
+    }
+
+    @Override
+    public long[] findTaskIdsByParent(long taskId) {
+        ensureNotStopped();
+        Set<Long> ids = new HashSet<>();
+        for (NaruTask t : tasks.values()) {
+            if (t.parentId() == taskId) {
+                ids.add(t.id());
+            }
+        }
+        return ids.stream().mapToLong(x -> x).toArray();
+    }
+
+
+//    public String resolveRoutineUuid(String uuidOrName) {
+//        List<NaruResourceInfo> list = routines();
+//        for (NaruResourceInfo s : list) {
+//            if (Objects.equals(s.getUuid(), uuidOrName)) {
+//                return s.getUuid();
+//            }
+//        }
+//        for (NaruResourceInfo s : list) {
+//            if (Objects.equals(NStringUtils.strip(s.getName()), NStringUtils.strip(uuidOrName))) {
+//                return s.getUuid();
+//            }
+//        }
+//        if (Objects.equals(session.name(), uuidOrName)) {
+//            return session.uuid();
+//        }
+//        Integer index = NLiteral.of(uuidOrName).asInt().orNull();
+//        if (index != null) {
+//            if (index - 1 >= 0 && index - 1 < list.size()) {
+//                return list.get(index - 1).getUuid();
+//            }
+//        }
+//        return null;
+//    }
+
+//    @Override
+//    public NaruRoutine ensureRoutineExists(String routineName, NaruVisibility visibilityOnCreate, NaruTask naruTask) {
+//        routineName = NStringUtils.firstNonBlankStripped(routineName, "main");
+//        NaruRoutine rt = routine(routineName, naruTask).orNull();
+//        if (rt != null) {
+//            return rt;
+//        }
+//        if (NaruUtils.isPath(routineName) || NBlankable.isBlank(routineName)) {
+//            throw new NIllegalArgumentException(NMsg.ofC("Invalid routine name: %s", routineName));
+//        } else {
+//            return session.ensureRoutineExists(routineName);
+//        }
+//    }
+
+//    @Override
+//    public NaruRoutine newRoutine(String routineName, NaruTask naruTask) {
+//        if (NaruUtils.isPath(routineName) || NBlankable.isBlank(routineName)) {
+//            throw new NIllegalArgumentException(NMsg.ofC("Invalid routine name: %s", routineName));
+//        } else {
+//            NaruRoutine rt = routine(routineName, naruTask).orNull();
+//            if (rt != null) {
+//                throw new NIllegalArgumentException(NMsg.ofC("Routine already exist name: %s", routineName));
+//            }
+//            return session.ensureRoutineExists(routineName);
+//        }
+//    }
+
+    @Override
+    public List<NaruResourceInfo> routines() {
+        return routines.entrySet().stream().map(x -> {
+            return new NaruResourceInfo()
+                    .setName(x.getKey())
+                    .setCreationInstant(x.getValue().creationInstant())
+                    .setModificationInstant(x.getValue().modificationInstant())
+                    .setVisibility(x.getValue().visibility())
+                    .setUuid(x.getValue().uuid());
+        }).sorted((o1, o2) -> o2.getModificationInstant().compareTo(o1.getModificationInstant())).collect(Collectors.toList());
+    }
+
+
+    @Override
+    public Map<String, Object> sessionEnv() {
+        return env.entrySet().stream().collect(Collectors.toMap(x -> x.getKey(), x -> x.getValue().orNull()));
+    }
+
+    @Override
+    public NOptional<NaruRoutine> routine(String nameOrPath, NaruTask task, boolean orCreate) {
+        if (ImplNaruUtils.isPath(nameOrPath)) {
+            NPath path = NPath.of(nameOrPath).toAbsolute(task.workingDir());
+            if (path.exists()) {
+                return RoutineHelper.loadFileRoutine(path, true);
+            }
+            if (!path.name().endsWith(".naru") && !path.name().endsWith(".")) {
+                path = NPath.of(nameOrPath + ".naru").toAbsolute(task.workingDir());
+                if (path.exists()) {
+                    return RoutineHelper.loadFileRoutine(path, true);
+                }
+            }
+        } else if (ImplNaruUtils.isValidRoutineName(nameOrPath)) {
+            NaruRoutine r = routines.get(nameOrPath);
+            if (r != null) {
+                return NOptional.of(r);
+            }
+        }
+        NPath path = NPath.of(nameOrPath).toAbsolute(task.workingDir());
+        if (path.exists()) {
+            return RoutineHelper.loadFileRoutine(path, true);
+        }
+        if (!path.name().endsWith(".naru") && !path.name().endsWith(".")) {
+            path = NPath.of(nameOrPath + ".naru").toAbsolute(task.workingDir());
+            if (path.exists()) {
+                return RoutineHelper.loadFileRoutine(path, true);
+            }
+        }
+        if (ImplNaruUtils.isValidRoutineName(nameOrPath) && orCreate) {
+            return NOptional.of(routines.computeIfAbsent(nameOrPath, x ->
+                    new NaruRoutineMem(UUID.randomUUID().toString(), x, getVisibility())));
+        }
+        return NOptional.ofEmpty(NMsg.ofC("Error statement: routine not found %s", nameOrPath));
+    }
+
+    /**
+     * Writes one task, without the rest of the session.
+     *
+     * <p>Cheaper than {@link #persist()}, and the store's history reconciliation is what
+     * makes it cheap: only the messages that are new get written, so appending to a long
+     * conversation costs one file rather than the whole conversation.
+     */
+    public void fireChangedTask(long id) {
+        NaruTask t = tasks.get(id);
+        if (t == null) {
+            return;
+        }
+        NaruSessionScope scope = store.scopeOf(uuid()).orElse(scopeForNewState());
+        if (!store.exists(uuid(), scope)) {
+            return;
+        }
+        try {
+            store.saveTask(uuid(), scope, taskState((NaruTaskImpl) t));
+        } catch (Exception ex) {
+            log(NaruLogMode.SCHEDULER, NMsg.ofC(
+                    "could not persist task %s: %s", id, ex.getMessage()).asError());
+        }
+    }
+}

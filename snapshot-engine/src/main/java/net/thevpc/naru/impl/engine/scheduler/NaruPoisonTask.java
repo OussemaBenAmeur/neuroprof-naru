@@ -1,0 +1,719 @@
+package net.thevpc.naru.impl.engine.scheduler;
+
+import net.thevpc.naru.api.agent.*;
+import net.thevpc.naru.api.mode.NaruPromptMode;
+import net.thevpc.naru.api.model.*;
+import net.thevpc.naru.api.registry.NaruToolTag;
+import net.thevpc.naru.api.registry.NaruDirective;
+import net.thevpc.naru.api.registry.NaruDirectiveCallContext;
+import net.thevpc.naru.api.routine.NaruRoutine;
+import net.thevpc.naru.api.routine.NaruStmtResult;
+import net.thevpc.naru.api.routine.NaruTaskFrame;
+import net.thevpc.naru.api.scheduler.*;
+import net.thevpc.naru.api.stmt.NaruStatement;
+import net.thevpc.naru.api.task.NaruTask;
+import net.thevpc.naru.api.task.NaruTaskStackFrame;
+import net.thevpc.naru.api.task.NaruTaskStackItem;
+import net.thevpc.nuts.elem.NElement;
+import net.thevpc.nuts.expr.NExprContextBuilder;
+import net.thevpc.nuts.expr.NExprVarResolver;
+import net.thevpc.nuts.io.NPath;
+import net.thevpc.nuts.text.NMsg;
+import net.thevpc.nuts.time.NDuration;
+import net.thevpc.nuts.util.NOptional;
+import net.thevpc.nuts.util.NUnsupportedOperationException;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+public class NaruPoisonTask implements NaruTask {
+    public static final NaruPoisonTask INSTANCE = new NaruPoisonTask();
+
+    @Override
+    public long id() {
+        return -1;
+    }
+
+    @Override
+    public NaruTaskStatus status() {
+        return NaruTaskStatus.KILLED;
+    }
+
+    @Override
+    public NaruTask load(NElement element) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NPath workingDir() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask setProjectDir(NPath projectDir) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask runInitHooks(String trigger) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruInputMode inputMode() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask inputMode(NaruInputMode inputMode) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruPromptMode promptMode() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask promptMode(NaruPromptMode newMode) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NPath projectDir() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public String getExtraContext() {
+        return "";
+    }
+
+    @Override
+    public NaruTask setExtraContext(String extraContext) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void log(NaruLogMode mode, NMsg s) {
+
+    }
+
+    @Override
+    public NaruModelRequest context(NaruSource... sources) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public List<NaruMessage> history() {
+        return List.of();
+    }
+
+    @Override
+    public List<NaruMessage> contextView() {
+        return List.of();
+    }
+
+    @Override
+    public void setHistory(List<NaruMessage> messages) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruMessage insertHistory(int index, NaruMessage message) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean removeHistoryAt(int index) {
+        return false;
+    }
+
+    @Override
+    public int pc() {
+        return 0;
+    }
+
+    @Override
+    public NaruTask pc(int nextPc) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public int clearHistory() {
+        return 0;
+    }
+
+    @Override
+    public NaruModelConfig model() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask setModel(NaruModelConfig model) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public int trimHistory(int count) {
+        return 0;
+    }
+
+    @Override
+    public boolean hasMoreStatements() {
+        return false;
+    }
+
+    @Override
+    public NaruTask addStatement(NaruStatement any) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask prependStatement(NaruStatement any) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask loadLines(String... any) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask loadFiles(NPath... any) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask addStatements(NaruStatement... any) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void throwError(NMsg nMsg) {
+
+    }
+
+    @Override
+    public String inputBuffer() {
+        return "";
+    }
+
+    @Override
+    public NaruTask inputBuffer(String buffer) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean addHistory(String m) {
+        return false;
+    }
+
+    @Override
+    public void addHistory(NaruMessage assistantMsg) {
+
+    }
+
+    @Override
+    public void setLastResult(NaruMessage lastResult) {
+
+    }
+
+    @Override
+    public void setReturnResult(Object returnResult) {
+
+    }
+
+    @Override
+    public Object getReturnResult() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruMessage getLastResult() {
+        throw new NUnsupportedOperationException();
+    }
+
+
+
+
+
+    @Override
+    public void tick() {
+        throw new NUnsupportedOperationException();
+
+    }
+
+    @Override
+    public void invokeDirective(String line) {
+        throw new NUnsupportedOperationException();
+
+    }
+
+    @Override
+    public NaruStmtResult invokeDirective(NaruDirective dir, NaruDirectiveCallContext context) {
+        throw new NUnsupportedOperationException();
+
+    }
+
+    @Override
+    public void invokeRoutine(String routineName) {
+        throw new NUnsupportedOperationException();
+
+    }
+
+    @Override
+    public NOptional<NaruStatement> nextStatement() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTaskFrame peekFrame() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask popFrame() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTaskFrame pushFrame(String routine, boolean inheritVars) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTaskFrame frame() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public int[] pctrace() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask unsetTaskEnv(String key) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask setTaskEnv(String key, Object value) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<Object> getTaskEnv(String key, boolean inherited) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public Object resolveVariable(String key) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask pushStatementModelCall(String prompt) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NExprVarResolver varResolver() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NExprContextBuilder expressionBuilder() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public Object evalExpression(String condition) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public String expandString(String condition) {
+        return "";
+    }
+
+    @Override
+    public NOptional<List<NaruStatement>> parseFile(NPath path) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<NaruStatement> parseStatement(String line) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NPath resolve(String path) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruResponse chat(NaruModelConfig modelKey, NaruModelRequest request) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruSession session() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask setWorkingDir(NPath workingDir) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void reset() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NElement toElement() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask fg() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask hold() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask unhold() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isHeld() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask awaitFilter(NaruEventFilter nv) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruEventFilter awaitFilter() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public List<NaruEvent> awaitReceived() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask releaseStepPermit() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public Map<String, NaruEventSubscription> eventSubscriptions() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask acquireStepPermit() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public long parentId() {
+        return -1;
+    }
+
+    @Override
+    public NOptional<NaruTask> parent() {
+        return NOptional.ofNamedEmpty(NMsg.ofC("parent task"));
+    }
+
+    @Override
+    public NaruTask defaultAdvance(NaruStatement stmt) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask bg() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask prependStatements(NaruStatement... any) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruSchedulerMode schedulerMode() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask schedulerMode(NaruSchedulerMode mode) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void requestInput(NMsg prompt) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public String consumeInput() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isFg() {
+        return false;
+    }
+
+    @Override
+    public Instant creationTime() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public String name() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask name(String newName) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask kill() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isKillRequested() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTaskMode taskMode() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask taskMode(NaruTaskMode newMode) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public List<NaruTaskStackFrame> stackFrames() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public List<NaruTaskStackItem> stacktrace() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<NaruStatement> peekStatement() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTaskInbox inbox() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask fireEvent(String eventType, Map<String, Object> args, NaruEventTarget target, NaruRetentionPolicy retention) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask sleep(NDuration duration) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask addAwaitReceived(NaruEvent event) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask subscribe(String eventType, NaruEventSubscription subscription) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<NaruRoutine> editRoutine() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public String editRoutineName() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<NaruRoutine> useRoutine(String name) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void setRoutineLine(int index, String name) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public Map<String, Object> getTaskEnv() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void appendRoutineLine(int increment, String name) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void call(String cmdline) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void addResultMessage(NMsg msg) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask addToolExclusion(String toolName) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask removeToolExclusion(String toolName) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public Set<String> findToolExclusions() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask removeToolTag(String toolTag) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask addToolTag(String toolTag) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public List<NaruToolTag> findToolTags() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public Set<String> findToolTagNames() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public List<NaruToolDefinition> findTools() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void addSystemHistory(Function<NaruTask, NaruMessage> sysHistory) {
+        throw new NUnsupportedOperationException();
+    }
+
+    // A poison task is not a task that happens to have no result, it is the absence of one, so
+    // the completion and result surface refuses outright rather than reporting a plausible
+    // looking answer. Anything asking a poison task how it went has already lost the thread.
+
+    @Override
+    public NOptional<Instant> endTime() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<NDuration> duration() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<String> error() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isCompleted() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isSuccess() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NOptional<Object> value() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public int exitCode() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public Map<String, Object> vars() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask throwIfFailed() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void await() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public boolean await(Duration timeout) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public void onComplete(Consumer<NaruTask> callback) {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<NaruTask> toFuture() {
+        throw new NUnsupportedOperationException();
+    }
+
+    @Override
+    public NaruTask cancel(String reason) {
+        throw new NUnsupportedOperationException();
+    }
+}

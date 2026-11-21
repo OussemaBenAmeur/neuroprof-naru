@@ -1,0 +1,238 @@
+{
+  "themes": [
+    {
+      "id": "default",
+      "name": "Default",
+      "mode": "dark",
+      "builtin": true,
+      "colors": {
+        "background": "#141414",
+        "surface": "#1c1c1c",
+        "border": "#434343",
+        "text": "#e6e6e6",
+        "textMuted": "#8d8d8d",
+        "accent": "#8d8d8d",
+        "bold": "#e6e6e6",
+        "italic": "#e6e6e6",
+        "code": "#e6e6e6",
+        "error": "#ef4444",
+        "success": "#22c55e",
+        "warning": "#f59e0b"
+      }
+    },
+    {
+      "id": "catppuccin-latte",
+      "name": "Catppuccin Latte",
+      "mode": "light",
+      "colors": {
+        "background": "#eff1f5",
+        "surface": "#e6e9ef",
+        "border": "#ccd0da",
+        "text": "#4c4f69",
+        "textMuted": "#6c6f85",
+        "accent": "#8839ef",
+        "bold": "#7287fd",
+        "italic": "#ea76cb",
+        "code": "#fe640b",
+        "error": "#d20f39",
+        "success": "#40a02b",
+        "warning": "#df8e1d"
+      },
+      "builtin": true
+    },
+    {
+      "id": "catppuccin-frappe",
+      "name": "Catppuccin Frappé",
+      "mode": "dark",
+      "colors": {
+        "background": "#303446",
+        "surface": "#414559",
+        "border": "#51576d",
+        "text": "#c6d0f5",
+        "textMuted": "#a5adce",
+        "accent": "#ca9ee6",
+        "bold": "#eebebe",
+        "italic": "#f4b8e4",
+        "code": "#ef9f76",
+        "error": "#e78284",
+        "success": "#a6d189",
+        "warning": "#e5c890"
+      },
+      "builtin": true
+    },
+    {
+      "id": "catppuccin-macchiato",
+      "name": "Catppuccin Macchiato",
+      "mode": "dark",
+      "colors": {
+        "background": "#24273a",
+        "surface": "#363a4f",
+        "border": "#494d64",
+        "text": "#cad3f5",
+        "textMuted": "#a5adcb",
+        "accent": "#c6a0f6",
+        "bold": "#b7bdf8",
+        "italic": "#f5bde6",
+        "code": "#f5a97f",
+        "error": "#ed8796",
+        "success": "#a6da95",
+        "warning": "#eed49f"
+      },
+      "builtin": true
+    },
+    {
+      "id": "catppuccin-mocha",
+      "name": "Catppuccin Mocha",
+      "mode": "dark",
+      "colors": {
+        "background": "#1e1e2e",
+        "surface": "#313244",
+        "border": "#45475a",
+        "text": "#cdd6f4",
+        "textMuted": "#a6adc8",
+        "accent": "#cba6f7",
+        "bold": "#b4befe",
+        "italic": "#f5c2e7",
+        "code": "#fab387",
+        "error": "#f38ba8",
+        "success": "#a6e3a1",
+        "warning": "#f9e2af"
+      },
+      "builtin": true
+    },
+    {
+      "id": "rose-pine",
+      "name": "Rosé Pine",
+      "mode": "dark",
+      "colors": {
+        "background": "#191724",
+        "surface": "#1f1d2e",
+        "border": "#403d52",
+        "text": "#e0def4",
+        "textMuted": "#908caa",
+        "accent": "#c4a7e7",
+        "bold": "#c4a7e7",
+        "italic": "#ebbcba",
+        "code": "#f6c177",
+        "error": "#eb6f92",
+        "success": "#9ccfd8",
+        "warning": "#f6c177"
+      },
+      "builtin": true
+    },
+    {
+      "id": "rose-pine-dawn",
+      "name": "Rosé Pine Dawn",
+      "mode": "light",
+      "colors": {
+        "background": "#faf4ed",
+        "surface": "#fffaf3",
+        "border": "#dfdad9",
+        "text": "#575279",
+        "textMuted": "#797593",
+        "accent": "#907aa9",
+        "bold": "#907aa9",
+        "italic": "#d7827e",
+        "code": "#ea9d34",
+        "error": "#b4637a",
+        "success": "#56949f",
+        "warning": "#ea9d34"
+      },
+      "builtin": true
+    },
+    {
+      "id": "gruvbox-dark",
+      "name": "Gruvbox Dark",
+      "mode": "dark",
+      "colors": {
+        "background": "#282828",
+        "surface": "#32302f",
+        "border": "#504945",
+        "text": "#ebdbb2",
+        "textMuted": "#a89984",
+        "accent": "#fe8019",
+        "bold": "#83a598",
+        "italic": "#d3869b",
+        "code": "#8ec07c",
+        "error": "#fb4934",
+        "success": "#b8bb26",
+        "warning": "#fabd2f"
+      },
+      "builtin": true
+    },
+    {
+      "id": "ivory",
+      "name": "Ivory",
+      "mode": "light",
+      "colors": {
+        "background": "#faf9f5",
+        "surface": "#f0eee6",
+        "border": "#e0ddd2",
+        "text": "#3d3d3a",
+        "textMuted": "#83827d",
+        "accent": "#d97757",
+        "bold": "#3266c9",
+        "italic": "#3f8f6b",
+        "code": "#c4613f",
+        "error": "#c43d3d",
+        "success": "#3f8f6b",
+        "warning": "#b8822a"
+      },
+      "builtin": true
+    },
+    {
+      "id": "pastel",
+      "name": "Pastel",
+      "mode": "light",
+      "colors": {
+        "background": "#f2f0e8",
+        "surface": "#e8e6dc",
+        "border": "#d6d3c6",
+        "text": "#4a4842",
+        "textMuted": "#8f8b80",
+        "accent": "#4f8a46",
+        "bold": "#4f8a46",
+        "italic": "#8a5cb5",
+        "code": "#b8623b",
+        "error": "#c0533f",
+        "success": "#4f8a46",
+        "warning": "#b8862c"
+      },
+      "builtin": true
+    },
+    {
+      "id": "nvchad-onedark",
+      "name": "NvChad Onedark",
+      "mode": "dark",
+      "colors": {
+        "background": "#1e222a",
+        "surface": "#282c34",
+        "border": "#42464e",
+        "text": "#abb2bf",
+        "textMuted": "#565c64",
+        "accent": "#61afef",
+        "bold": "#c882e7",
+        "italic": "#a3b8ef",
+        "code": "#e7c787",
+        "error": "#e06c75",
+        "success": "#98c379",
+        "warning": "#e7c787"
+      },
+      "builtin": true
+    }
+  ],
+  "colors": [
+    "background",
+    "accent",
+    "surface",
+    "bold",
+    "border",
+    "italic",
+    "text",
+    "code",
+    "textMuted",
+    "error",
+    "success",
+    "warning"
+  ]
+}

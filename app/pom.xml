@@ -1,0 +1,24 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>org.naruprof</groupId><artifactId>naruprof-naru</artifactId><version>1.0.0</version></parent>
+  <artifactId>app</artifactId>
+  <dependencies>
+    <dependency><groupId>org.naruprof</groupId><artifactId>service-impl</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.naruprof</groupId><artifactId>ws-rest</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.naruprof</groupId><artifactId>ws-grpc</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.naruprof</groupId><artifactId>dal-naru</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.naruprof</groupId><artifactId>dal-jpa</artifactId><version>${project.version}</version></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>com.tngtech.archunit</groupId><artifactId>archunit</artifactId><version>1.4.2</version><scope>test</scope></dependency>
+  </dependencies>
+  <build><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build>
+  <profiles>
+    <profile>
+      <id>real-deps</id>
+      <build><plugins><plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-failsafe-plugin</artifactId>
+        <executions><execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution></executions>
+      </plugin></plugins></build>
+    </profile>
+  </profiles>
+</project>
