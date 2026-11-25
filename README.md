@@ -46,7 +46,7 @@ java -jar app/target/app-1.0.0.jar
 
 On PowerShell set the same variables via `$env:VARIABLE = 'value'` and use a new writable directory for `NARUPROF_DATA_DIR`. Run `python fixtures/model.py` and the same JAR command.
 
-In integrated mode the launcher sets `NARU_HTTP_URL` (default `http://127.0.0.1:8082`), `NARU_GRPC_TARGET` (default `127.0.0.1:9092`), the profile identity, and the two service tokens. It uses `GET /internal/health/live` and `GET /internal/health/ready` on the private HTTP listener with the Vert.x token. OpenAI and OpenRouter Chat Completions adapters resolve keys at request time. `LH_AUTH_FILE` defaults to `auth.json` under the profile directory, with environment precedence. Set `NARUPROF_MODEL_URL` and `NARUPROF_MODEL_ID` for the explicit `learning` fixture adapter. `NARUPROF_MODEL_TOKEN` is its optional bearer credential.
+In integrated mode the launcher sets `NARU_HTTP_URL` (default `http://127.0.0.1:8082`), `NARU_GRPC_TARGET` (default `127.0.0.1:9092`), the profile identity, and the two service tokens. It uses `GET /internal/health/live` and `GET /internal/health/ready` on the private HTTP listener without a role token. Only these two exact GET routes bypass service authentication; application routes, profile exports and streams still require the Vert.x token. Rebuild the JAR after updating this filter. OpenAI and OpenRouter Chat Completions adapters resolve keys at request time. `LH_AUTH_FILE` defaults to `auth.json` under the profile directory, with environment precedence. Set `NARUPROF_MODEL_URL` and `NARUPROF_MODEL_ID` for the explicit `learning` fixture adapter. `NARUPROF_MODEL_TOKEN` is its optional bearer credential.
 
 ## Peer fixtures
 
